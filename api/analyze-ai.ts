@@ -48,7 +48,7 @@ const UPSTREAM_TIMEOUT_MS = 55_000
 // Mode streaming: batas waktu keseluruhan aliran lebih longgar karena proses
 // berpikir model ditampilkan langsung ke pengguna, dan jatah token keluaran
 // lebih besar agar penalaran + JSON jawaban sama-sama muat.
-const STREAM_TIMEOUT_MS = 90_000
+const STREAM_TIMEOUT_MS = 120_000
 const STREAM_MAX_TOKENS = 6000
 
 class UpstreamTimeoutError extends Error {
@@ -475,7 +475,7 @@ async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<voi
       console.error(`[analyze-ai] (stream) Timeout ${STREAM_TIMEOUT_MS / 1000} detik menunggu OpenRouter`)
       res.status(502).json({
         error: 'Layanan AI terlalu lama merespons. Coba lagi — hasil analisis standar tetap bisa dipakai.',
-        detail: 'Timeout 90 detik menunggu OpenRouter (streaming)',
+        detail: 'Timeout 120 detik menunggu OpenRouter (streaming)',
       })
       return
     }
@@ -623,7 +623,7 @@ async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<voi
     if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
       streamError = {
         error: 'Layanan AI terlalu lama merespons. Coba lagi — hasil analisis standar tetap bisa dipakai.',
-        detail: 'Timeout 90 detik menunggu OpenRouter (streaming)',
+        detail: 'Timeout 120 detik menunggu OpenRouter (streaming)',
       }
     } else if (!streamError) {
       streamError = {

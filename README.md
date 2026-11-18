@@ -169,7 +169,7 @@ Error **sebelum** aliran dimulai (validasi, rate limit, key belum
 terpasang, upstream menolak di awal) tetap dibalas sebagai JSON biasa
 dengan status HTTP seperti mode non-streaming. Parameter khusus jalur
 streaming: `reasoning: {effort: "medium"}`, `max_tokens` 6000, dan batas
-waktu keseluruhan aliran **90 detik**. Mode non-streaming tidak berubah
+waktu keseluruhan aliran **120 detik**. Mode non-streaming tidak berubah
 (effort low, `max_tokens` 3000, timeout 55 detik). Di sisi frontend, panel
 menampilkan teks penalaran secara langsung (dibatasi ±8.000 karakter)
 beserta penghitung detik; setelah selesai panel terlipat menjadi ringkasan

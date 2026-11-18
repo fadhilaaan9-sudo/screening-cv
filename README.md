@@ -42,9 +42,10 @@ Catatan: `npm run dev` hanya menjalankan website (skor standar tetap jalan), tap
   "Coba CV Contoh".
 - Penghitung karakter/kata langsung pada textarea CV.
 - **Analisis AI (OpenRouter)** — opsional, atas persetujuan pengguna: saran
-  penulisan ulang, kekurangan kualitatif, dan contoh ringkasan profil dari
-  backend `api/analyze-ai.ts` (lihat bagian Backend AI). Hanya untuk testing
-  dan **tidak mengubah skor**.
+  penulisan ulang, kekurangan kualitatif, dan saran HRD untuk lowongan yang
+  dilamar dari backend `api/analyze-ai.ts` (lihat bagian Backend AI). Hanya
+  untuk testing dan **tidak mengubah skor**. Penilaian AI memakai rubrik di
+  `docs/rubrik-cv-bagus.md`.
 
 ## Struktur Folder
 

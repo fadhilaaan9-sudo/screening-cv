@@ -1,5 +1,7 @@
 // CV contoh bawaan: CV Bahasa Indonesia yang memang kuat,
-// dipakai tombol "Coba CV Contoh". Skornya >= 90 dengan aturan penilaian saat ini.
+// dipakai tombol "Coba CV Contoh". Dengan aturan penilaian berbasis bukti,
+// skornya sekitar 72 (Sudah Bagus) — satu bukti kerja sangat kuat, tapi
+// hanya dua bukti lain yang lemah.
 export const SAMPLE_CV = `Muhammad Fakhri
 Data Analyst
 mfakhri338@gmail.com | +62 812-3456-7890 | linkedin.com/in/mfakhri | github.com/Fakhriaja07

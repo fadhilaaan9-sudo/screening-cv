@@ -1,5 +1,34 @@
-// Logika penilaian CV berbasis aturan (rule-based), 100% berjalan di browser.
-// Total 100 poin, 6 aspek, 14 pemeriksaan.
+// Logika penilaian CV berbasis bukti (rule-based), 100% berjalan di browser.
+// Prinsip: nilai bukti, bukan kata. Satu bukti = satu pengalaman, magang,
+// proyek, organisasi, tugas akhir, atau freelance yang dinilai STAR:
+// Peran, Periode, Aksi, Hasil. Hanya 3 bukti terbaik yang dihitung.
+// Total mentah 100 poin, ditampilkan dengan plafon realistis 95.
+
+// ---------- Bahasa CV ----------
+// Skor memakai kamus bahasa CV-nya (Indonesia / Inggris).
+// Semua pesan hasil TETAP Bahasa Indonesia - bahasa hanya memilih kamus,
+// bukan bahasa hasil.
+export type CvLanguage = 'id' | 'en'
+
+const ID_MARKERS = [
+  'yang', 'dan', 'dengan', 'saya', 'lulusan', 'pengalaman', 'pendidikan',
+  'keahlian', 'magang', 'proyek', 'mengelola', 'membangun', 'universitas',
+  'perusahaan', 'selama', 'untuk', 'dalam', 'adalah',
+]
+const EN_MARKERS = [
+  'the', 'and', 'with', 'experience', 'education', 'skills', 'internship',
+  'project', 'managed', 'developed', 'increased', 'university', 'company',
+  'years', 'team', 'results', 'responsible',
+]
+
+/** Tebak bahasa utama CV dari kata penanda. Default: Indonesia. */
+export function detectCvLanguage(text: string): CvLanguage {
+  const words = new Set(text.toLowerCase().split(/[^a-z]+/))
+  const count = (markers: string[]) => markers.filter((w) => words.has(w)).length
+  return count(EN_MARKERS) > count(ID_MARKERS) ? 'en' : 'id'
+}
+
+export type CandidateMode = 'fresh' | 'experienced'
 
 export type CheckStatus = 'baik' | 'kurang' | 'buruk'
 
@@ -10,6 +39,8 @@ export interface CheckItem {
   score: number
   max: number
   status: CheckStatus
+  // Wajib format "angka + alasan": contoh "24/30 - tiga buktimu punya
+  // aksi dan hasil yang jelas; kurang 6 karena dua bukti belum ada periode."
   message: string
 }
 
@@ -20,21 +51,60 @@ export interface AspectResult {
   checks: CheckItem[]
 }
 
+export type EvidenceSource =
+  | 'kerja'
+  | 'magang'
+  | 'proyek'
+  | 'organisasi'
+  | 'tugas-akhir'
+  | 'freelance'
+  | 'volunteer'
+
+export interface Evidence {
+  title: string
+  source: EvidenceSource
+  text: string
+  // Nilai STAR 0-10: Peran 2,5 / Periode 2,5 / Aksi 2,5 / Hasil 2,5.
+  roleScore: number
+  periodScore: number
+  actionScore: number
+  resultScore: number
+  score: number
+  reasons: string[]
+}
+
 export interface KeywordResult {
+  // Persen kata kunci yang ditemukan DI DALAM bukti (bukan sekadar di CV).
   percent: number
   found: string[]
   missing: string[]
   total: number
+  inEvidence: string[]
+  inCvOnly: string[]
 }
 
 export interface AnalysisResult {
+  // Skor Siap (capped 95). `total` dan `label` dipertahankan untuk kompatibilitas.
   total: number
   label: string
+  readyScore: number
+  readyLabel: string
+  rawTotal: number
+  // Skor Cocok: null bila user tidak mengisi posisi target / deskripsi lowongan.
+  matchScore: number | null
+  matchLabel: string | null
+  mode: CandidateMode
+  // Bahasa utama CV ('id' / 'en') — dipakai memilih kamus, hasil tetap Indonesia.
+  cvLanguage: CvLanguage
   aspects: AspectResult[]
   strengths: CheckItem[]
   priorities: CheckItem[]
+  topEvidence: Evidence[]
+  extraEvidence: Evidence[]
   keywords: KeywordResult | null
   roleWarning: string | null
+  modeNote: string | null
+  consistencyWarnings: string[]
   portfolioUrl: string | null
   wordCount: number
 }
@@ -42,10 +112,25 @@ export interface AnalysisResult {
 export interface AnalyzeOptions {
   targetRole?: string
   jobDesc?: string
+  mode?: CandidateMode
 }
+
+export const MAX_DISPLAY_SCORE = 95
 
 export function countWords(text: string): number {
   return text.split(/\s+/).filter(Boolean).length
+}
+
+export function labelFor(score: number): string {
+  if (score >= 85) return 'Sangat Siap Dilamar'
+  if (score >= 70) return 'Sudah Bagus'
+  if (score >= 50) return 'Perlu Perbaikan'
+  return 'Perlu Dirombak Dulu'
+}
+
+/** Plafon realistis: total mentah 96-100 ditampilkan sebagai 95. */
+export function applyCap(raw: number): number {
+  return Math.min(MAX_DISPLAY_SCORE, Math.max(0, Math.round(raw)))
 }
 
 function statusOf(score: number, max: number): CheckStatus {
@@ -63,6 +148,14 @@ function makeCheck(
   message: string,
 ): CheckItem {
   return { id, aspect, title, score, max, status: statusOf(score, max), message }
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function hasWord(text: string, word: string): boolean {
+  return new RegExp(`\\b${escapeRegExp(word)}\\b`, 'i').test(text)
 }
 
 // ---------- Deteksi nomor HP Indonesia ----------
@@ -83,7 +176,7 @@ export function detectPhone(text: string): boolean {
   return findPhone(text) !== null
 }
 
-// ---------- Deteksi link portofolio ----------
+// ---------- Deteksi link karya / portofolio ----------
 
 const PORTFOLIO_DOMAINS = [
   'github.com',
@@ -122,9 +215,9 @@ export function findPortfolio(text: string): string | null {
       PORTFOLIO_SUFFIXES.some((s) => domain.endsWith(s))
     if (known) return clean
   }
-  // 2) URL apa pun pada baris berlabel "portofolio"/"portfolio".
+  // 2) URL apa pun pada baris berlabel "portofolio"/"portfolio"/"karya".
   for (const line of text.split('\n')) {
-    if (/portofolio|portfolio/i.test(line)) {
+    if (/portofolio|portfolio|karya/i.test(line)) {
       const labeled = line.match(URL_PATTERN) ?? []
       for (const raw of labeled) {
         const clean = raw.replace(/[.)]+$/, '')
@@ -136,97 +229,121 @@ export function findPortfolio(text: string): string | null {
   return null
 }
 
-// ---------- Ekstraksi bagian (section) berdasarkan heading ----------
-
-const ALL_HEADING_WORDS = [
-  'ringkasan',
-  'tentang saya',
-  'profil',
-  'summary',
-  'profile',
-  'objective',
-  'tentang',
-  'pengalaman',
-  'experience',
-  'pekerjaan',
-  'work history',
-  'riwayat kerja',
-  'pendidikan',
-  'education',
-  'keahlian',
-  'skill',
-  'kemampuan',
-  'kompetensi',
-  'tools',
-  'teknologi',
-  'proyek',
-  'project',
-  'sertifikasi',
-  'certification',
-  'kontak',
-  'contact',
+// Domisili: nama kota besar Indonesia atau ", Indonesia" di baris awal CV.
+const DOMICILE_WORDS = [
+  'jakarta', 'bandung', 'surabaya', 'medan', 'makassar', 'semarang',
+  'palembang', 'pekanbaru', 'yogyakarta', 'jogja', 'bekasi', 'tangerang',
+  'depok', 'bogor', 'malang', 'denpasar', 'balikpapan', 'batam', 'padang',
+  'bandar lampung', 'indonesia',
 ]
 
-function isHeadingLine(line: string, words: string[]): boolean {
-  const trimmed = line.trim().toLowerCase()
-  if (trimmed.length === 0 || trimmed.length > 60) return false
-  return words.some((w) => trimmed.includes(w))
+function findDomicile(text: string): boolean {
+  const head = text.split('\n').slice(0, 8).join(' ').toLowerCase()
+  return DOMICILE_WORDS.some((w) => head.includes(w))
 }
 
-function getSection(text: string, targets: string[]): string {
-  const lines = text.split('\n')
-  let start = -1
-  for (let i = 0; i < lines.length; i++) {
-    if (isHeadingLine(lines[i], targets)) {
-      start = i
-      break
+// ---------- Pemecah bagian (section) berdasarkan heading ----------
+// Heading dikenali secara ketat: baris pendek yang DIAWALI kata heading.
+// Kalimat biasa seperti "Saya pernah magang..." tidak lagi salah jadi heading.
+
+const SECTION_HEADINGS: { kind: string; words: string[] }[] = [
+  { kind: 'ringkasan', words: ['ringkasan', 'tentang saya', 'profil', 'summary', 'professional summary', 'profile', 'objective'] },
+  { kind: 'pengalaman', words: ['pengalaman kerja', 'pengalaman', 'experience', 'experiences', 'work experience', 'professional experience', 'employment history', 'pekerjaan', 'work history', 'riwayat kerja'] },
+  { kind: 'magang', words: ['magang', 'internship', 'internships', 'praktik kerja', 'pkl'] },
+  { kind: 'proyek', words: ['proyek', 'project', 'projects', 'portofolio proyek'] },
+  { kind: 'organisasi', words: ['organisasi', 'organization', 'organizations', 'kepanitiaan', 'pengalaman organisasi'] },
+  { kind: 'tugas-akhir', words: ['tugas akhir', 'skripsi', 'thesis', 'penelitian'] },
+  { kind: 'freelance', words: ['freelance', 'pekerjaan lepas', 'freelancer'] },
+  { kind: 'volunteer', words: ['volunteer', 'volunteers', 'volunteer experience', 'relawan', 'kesukarelawanan'] },
+  { kind: 'pendidikan', words: ['pendidikan', 'education', 'riwayat pendidikan'] },
+  { kind: 'keahlian', words: ['keahlian', 'skill', 'skills', 'technical skills', 'skills & tools', 'kemampuan', 'kompetensi', 'tools', 'teknologi'] },
+  { kind: 'sertifikasi', words: ['sertifikasi', 'sertifikat', 'certification', 'certifications', 'certificate', 'certificates', 'course', 'courses', 'training', 'trainings', 'certified', 'kursus', 'pelatihan', 'bootcamp'] },
+  { kind: 'kontak', words: ['kontak', 'contact'] },
+]
+
+function headingKind(line: string): string | null {
+  const t = line.trim().toLowerCase().replace(/:$/, '')
+  if (t.length === 0 || t.length > 50) return null
+  // Judul entri bukti ("Magang Data Analyst — PT X (2024)") bukan heading:
+  // heading bagian tidak pernah berisi pemisah "—" atau tahun.
+  if (/—|–/.test(t) || /\b(19|20)\d{2}\b/.test(t)) return null
+  // Bentuk jamak diperlakukan sama dengan tunggalnya ('Skills' -> 'skill',
+  // 'Projects' -> 'project'). Varian asli tetap dicek, jadi tidak ada yang hilang.
+  const firstWord = t.split(' ')[0] ?? ''
+  const singularFirst =
+    firstWord.length > 3 && firstWord.endsWith('s') ? firstWord.slice(0, -1) : firstWord
+  const singular = singularFirst === firstWord ? t : t.replace(firstWord, singularFirst)
+  const variants = singular === t ? [t] : [t, singular]
+  for (const section of SECTION_HEADINGS) {
+    for (const w of section.words) {
+      for (const v of variants) {
+        if (v === w || v.startsWith(w + ' ') || v.startsWith(w + ' —') || v.startsWith(w + ' -')) {
+          return section.kind
+        }
+      }
     }
   }
-  if (start === -1) return ''
-  const collected: string[] = []
-  for (let i = start + 1; i < lines.length; i++) {
-    if (isHeadingLine(lines[i], ALL_HEADING_WORDS)) break
-    collected.push(lines[i])
-  }
-  return collected.join('\n').trim()
+  return null
 }
 
-// ---------- Kata kerja aksi & hasil terukur ----------
+interface Section {
+  kind: string
+  lines: string[]
+}
+
+function splitSections(text: string): Section[] {
+  const sections: Section[] = []
+  let current: Section | null = null
+  for (const line of text.split('\n')) {
+    const kind = headingKind(line)
+    if (kind) {
+      current = { kind, lines: [] }
+      sections.push(current)
+    } else if (current) {
+      current.lines.push(line)
+    }
+  }
+  return sections
+}
+
+function getSectionText(sections: Section[], kinds: string[]): string {
+  return sections
+    .filter((s) => kinds.includes(s.kind))
+    .map((s) => s.lines.join('\n'))
+    .join('\n')
+    .trim()
+}
+
+// ---------- Kata kerja aksi & hasil terukur (hanya di dalam bukti) ----------
 
 const ACTION_VERBS = [
-  'meningkatkan',
-  'mengelola',
-  'membangun',
-  'mengembangkan',
-  'menganalisis',
-  'memimpin',
-  'merancang',
-  'mengotomatisasi',
-  'mencapai',
-  'menurunkan',
-  'menghemat',
-  'membuat',
-  'menjual',
-  'melatih',
-  'increased',
-  'managed',
-  'developed',
-  'built',
-  'led',
-  'created',
-  'improved',
-  'analyzed',
-  'designed',
-  'automated',
-  'reduced',
+  'meningkatkan', 'mengelola', 'membangun', 'mengembangkan', 'menganalisis',
+  'memimpin', 'merancang', 'mengotomatisasi', 'mencapai', 'menurunkan',
+  'menghemat', 'membuat', 'menjual', 'melatih', 'menyusun', 'mengolah',
+  'menerapkan', 'memperbaiki', 'menyelesaikan', 'mengkoordinasikan',
+  'increased', 'managed', 'developed', 'built', 'led', 'created',
+  'improved', 'analyzed', 'designed', 'automated', 'reduced', 'delivered',
+  'implemented', 'launched', 'coordinated', 'optimized', 'achieved',
+  'supervised', 'trained', 'presented', 'resolved', 'streamlined',
 ]
 
-function countActionVerbs(lowerText: string): number {
+const WEAK_VERBS = [
+  'membantu', 'melakukan', 'mengerjakan', 'bertugas', 'mengikuti', 'mendukung',
+  'assisted', 'helped', 'performed', 'worked', 'participated', 'supported',
+]
+
+function countActionVerbs(text: string): number {
+  const lower = text.toLowerCase()
   let found = 0
   for (const verb of ACTION_VERBS) {
-    if (new RegExp(`\\b${verb}\\b`, 'i').test(lowerText)) found++
+    if (new RegExp(`\\b${escapeRegExp(verb)}\\b`, 'i').test(lower)) found++
   }
   return found
+}
+
+function hasWeakVerbOnly(text: string): boolean {
+  const lower = text.toLowerCase()
+  return WEAK_VERBS.some((v) => new RegExp(`\\b${escapeRegExp(v)}\\b`, 'i').test(lower))
 }
 
 function countMeasurableResults(text: string): number {
@@ -239,8 +356,160 @@ function countMeasurableResults(text: string): number {
   const rpMatches = t.match(/rp\s*\d[\d.,]*/gi) ?? []
   t = t.replace(/rp\s*\d[\d.,]*/gi, ' ')
   const unitMatches =
-    t.match(/\d+(?:[.,]\d+)?\s*(%|juta|ribu|orang|klien|proyek|jam|hari|bulan|tahun)/gi) ?? []
-  return rpMatches.length + unitMatches.length
+    t.match(/\d+(?:[.,]\d+)?\s*(%|juta|ribu|orang|klien|proyek|jam|hari|bulan|tahun|people|users?|clients?|customers?|projects?|hours?|days?|months?|years?|teams?|members?|stores?|dollars?|usd)/gi) ?? []
+  const dollarMatches = t.match(/\$\s*\d[\d.,]*/gi) ?? []
+  t = t.replace(/\$\s*\d[\d.,]*/gi, ' ')
+  return rpMatches.length + dollarMatches.length + unitMatches.length
+}
+
+function extractYears(text: string): number[] {
+  return (text.match(/\b(19|20)\d{2}\b/g) ?? []).map((y) => parseInt(y, 10))
+}
+
+// ---------- Pemecah entri bukti & penilaian STAR ----------
+
+const EVIDENCE_KINDS: Record<string, EvidenceSource> = {
+  pengalaman: 'kerja',
+  magang: 'magang',
+  proyek: 'proyek',
+  organisasi: 'organisasi',
+  'tugas-akhir': 'tugas-akhir',
+  freelance: 'freelance',
+  volunteer: 'volunteer',
+}
+
+function isBulletLine(line: string): boolean {
+  return /^\s*([\-•*]|\d+[.)])\s+/.test(line)
+}
+
+function cleanBullet(line: string): string {
+  return line.replace(/^\s*([\-•*]|\d+[.)])\s+/, '').trim()
+}
+
+// Baris judul entri: ada pemisah peran-tempat ("—") atau ada tahun,
+// atau baris pendek tanpa titik yang menyebut tempat (PT / Universitas / ...).
+function looksLikeEntryHeader(line: string): boolean {
+  const t = line.trim()
+  if (t.length === 0 || t.length > 90 || isBulletLine(t)) return false
+  if (/—|–|\s-\s/.test(t)) return true
+  if (/\b(19|20)\d{2}\b/.test(t)) return true
+  if (!t.endsWith('.') && t.length <= 70 && /\b(PT|CV|Universitas|Institut|Sekolah|Organisasi|Komunitas|Himpunan|University|College|Organization|Community)\b/.test(t)) {
+    return true
+  }
+  return false
+}
+
+interface RawEntry {
+  header: string
+  bodyLines: string[]
+  source: EvidenceSource
+}
+
+/** Pecah satu bagian bukti menjadi entri-entri (satu entri = satu pengalaman/proyek). */
+function splitEntries(lines: string[], source: EvidenceSource): RawEntry[] {
+  const entries: RawEntry[] = []
+  let current: RawEntry | null = null
+  const flush = () => {
+    if (current && (current.header || current.bodyLines.length > 0)) entries.push(current)
+    current = null
+  }
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (!line) continue
+    if (isBulletLine(line)) {
+      if (!current) current = { header: '', bodyLines: [], source }
+      current.bodyLines.push(cleanBullet(line))
+    } else if (looksLikeEntryHeader(line)) {
+      // Judul baru: entri sebelumnya selesai, kecuali entri saat ini belum punya judul.
+      if (current && current.header) flush()
+      if (!current) current = { header: '', bodyLines: [], source }
+      if (!current.header) current.header = line
+      else current.bodyLines.push(line)
+    } else {
+      if (!current) current = { header: '', bodyLines: [], source }
+      current.bodyLines.push(line)
+    }
+  }
+  flush()
+  return entries
+}
+
+function entryKey(entry: RawEntry): string {
+  const text = `${entry.header} ${entry.bodyLines.join(' ')}`.toLowerCase()
+  const years = extractYears(text).join('-')
+  const place = entry.header.split(/—|–|-/)[1]?.trim() ?? ''
+  return `${place}|${years}|${text.slice(0, 40)}`.replace(/\s+/g, ' ').trim()
+}
+
+/** Nilai satu bukti dengan STAR. Tiap unsur 2,5 poin; unsur yang lemah dapat separuh. */
+export function scoreEvidence(entry: RawEntry): Evidence {
+  const text = [entry.header, ...entry.bodyLines].join('\n').trim()
+  const reasons: string[] = []
+
+  // P - Peran: judul memisahkan peran dan tempat ("Data Analyst — PT X").
+  let roleScore = 0
+  const parts = entry.header.split(/—|–|\s+-\s+/).map((p) => p.trim()).filter(Boolean)
+  if (parts.length >= 2) roleScore = 2.5
+  else if (entry.header) roleScore = 1.25
+  if (roleScore < 2.5) reasons.push('peran atau tempatnya belum jelas')
+
+  // T - Periode: ada tahun (satu tahun saja sudah cukup).
+  const years = extractYears(text)
+  let periodScore = 0
+  if (years.length > 0) periodScore = 2.5
+  else if (/sekarang|saat ini|present/i.test(text)) periodScore = 1.25
+  if (periodScore < 2.5) reasons.push('belum ada periode/tahun')
+
+  // A - Aksi: kata kerja kuat di DALAM bukti ini (bukan di ringkasan).
+  const verbCount = countActionVerbs(text)
+  let actionScore = 0
+  if (verbCount >= 1) actionScore = 2.5
+  else if (hasWeakVerbOnly(text)) actionScore = 1.25
+  if (actionScore < 2.5) {
+    reasons.push(actionScore === 0 ? 'belum ada kata kerja aksi' : 'kata kerjanya masih lemah (mis. "membantu")')
+  }
+
+  // H - Hasil: angka terukur di DALAM bukti ini.
+  const resultCount = countMeasurableResults(text)
+  let resultScore = 0
+  if (resultCount >= 2) resultScore = 2.5
+  else if (resultCount === 1) resultScore = 1.25
+  if (resultScore < 2.5) reasons.push('belum ada hasil terukur (angka)')
+
+  const score = roleScore + periodScore + actionScore + resultScore
+  const title = entry.header || text.split('\n')[0]?.slice(0, 80) || '(tanpa judul)'
+  return {
+    title,
+    source: entry.source,
+    text,
+    roleScore,
+    periodScore,
+    actionScore,
+    resultScore,
+    score,
+    reasons,
+  }
+}
+
+/** Kumpulkan semua bukti dari semua bagian bukti, tanpa duplikat. */
+export function extractEvidence(text: string): Evidence[] {
+  const sections = splitSections(text)
+  const raw: RawEntry[] = []
+  for (const section of sections) {
+    const source = EVIDENCE_KINDS[section.kind]
+    if (!source) continue
+    raw.push(...splitEntries(section.lines, source))
+  }
+  // Duplikat: bukti yang sama ditulis di dua tempat dihitung satu kali.
+  const seen = new Map<string, RawEntry>()
+  for (const entry of raw) {
+    const key = entryKey(entry)
+    const prev = seen.get(key)
+    if (!prev || entry.bodyLines.join(' ').length > prev.bodyLines.join(' ').length) {
+      seen.set(key, entry)
+    }
+  }
+  return [...seen.values()].map(scoreEvidence)
 }
 
 // ---------- Kata kunci lowongan ----------
@@ -261,7 +530,11 @@ const STOPWORDS = new Set([
   'able', 'strong', 'skills', 'skill', 'knowledge', 'using', 'use', 'etc',
 ])
 
-function extractJobKeywords(jobDesc: string, cvLower: string): KeywordResult {
+function extractJobKeywords(
+  jobDesc: string,
+  cvLower: string,
+  evidenceLower: string,
+): KeywordResult {
   const words = jobDesc.toLowerCase().match(/[a-z0-9][a-z0-9+#.-]*/g) ?? []
   const freq = new Map<string, number>()
   for (const w of words) {
@@ -273,19 +546,67 @@ function extractJobKeywords(jobDesc: string, cvLower: string): KeywordResult {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 18)
     .map(([w]) => w)
-  const found: string[] = []
+  const inEvidence: string[] = []
+  const inCvOnly: string[] = []
   const missing: string[] = []
   for (const kw of selected) {
-    const pattern = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
-    if (pattern.test(cvLower)) found.push(kw)
+    const pattern = new RegExp(`\\b${escapeRegExp(kw)}\\b`, 'i')
+    if (pattern.test(evidenceLower)) inEvidence.push(kw)
+    else if (pattern.test(cvLower)) inCvOnly.push(kw)
     else missing.push(kw)
   }
   return {
-    percent: selected.length ? Math.round((found.length / selected.length) * 100) : 0,
-    found,
+    percent: selected.length ? Math.round((inEvidence.length / selected.length) * 100) : 0,
+    found: [...inEvidence, ...inCvOnly],
     missing,
     total: selected.length,
+    inEvidence,
+    inCvOnly,
   }
+}
+
+// Kata peran/jabatan umum, dipakai bila user tidak mengisi posisi target.
+const ROLE_WORDS = [
+  'analyst', 'analis', 'developer', 'programmer', 'engineer', 'desainer', 'designer',
+  'administrasi', 'admin', 'marketing', 'akuntan', 'accountant', 'guru', 'perawat',
+  'dokter', 'kasir', 'manager', 'manajer', 'staff', 'staf', 'operator', 'teknisi',
+  'penulis', 'jurnalis', 'arsitek', 'apoteker', 'auditor', 'konsultan', 'sales',
+  'customer', 'service', 'data', 'keuangan', 'finance', 'hrd', 'logistik', 'produksi',
+]
+
+/** Kata-kata penting dari posisi target (kata pendek dan kata umum dibuang). */
+function significantRoleWords(role: string): string[] {
+  return role
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 4 && !STOPWORDS.has(w))
+}
+
+// Sinonim skill yang searti digabung jadi satu (anti-duplikat).
+const SKILL_SYNONYMS: Record<string, string> = {
+  'microsoft excel': 'excel',
+  'ms excel': 'excel',
+  'microsoft word': 'word',
+  'ms word': 'word',
+  'microsoft powerpoint': 'powerpoint',
+  'ms powerpoint': 'powerpoint',
+  powerbi: 'power bi',
+  'bahasa inggris': 'inggris',
+  'english': 'inggris',
+}
+
+function normalizeSkill(raw: string): string {
+  const s = raw.toLowerCase().replace(/^\s*[-*]\s*/, '').trim()
+  return SKILL_SYNONYMS[s] ?? s
+}
+
+function parseSkillItems(sectionText: string): string[] {
+  if (!sectionText) return []
+  const items = sectionText
+    .split(/[\n,;•·|]+/)
+    .map((s) => normalizeSkill(s))
+    .filter((s) => s.length >= 2)
+  return [...new Set(items)]
 }
 
 // ---------- Fungsi analisis utama ----------
@@ -293,200 +614,282 @@ function extractJobKeywords(jobDesc: string, cvLower: string): KeywordResult {
 export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): AnalysisResult {
   const text = rawText ?? ''
   const lower = text.toLowerCase()
+  const cvLanguage = detectCvLanguage(text)
   const totalWords = countWords(text)
+  const mode: CandidateMode = options.mode ?? 'fresh'
+  const sections = splitSections(text)
+  const evidence = extractEvidence(text)
+  const evidenceText = evidence.map((e) => e.text).join('\n')
+  const evidenceLower = evidenceText.toLowerCase()
+  const summaryText = getSectionText(sections, ['ringkasan'])
 
-  // ===== KONTAK (maks 20) =====
+  // ===== KONTAK (maks 15) =====
   const emailMatch = lower.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/)
-  const emailScore = emailMatch ? 7 : 0
-
+  const emailScore = emailMatch ? 6 : 0
   const phone = findPhone(text)
-  const phoneScore = phone ? 6 : 0
-
-  const linkedinScore = lower.includes('linkedin.com') ? 4 : 0
-
+  const phoneScore = phone ? 5 : 0
+  const linkedinScore = lower.includes('linkedin.com') ? 2 : 0
   const portfolioUrl = findPortfolio(text)
-  const portfolioScore = portfolioUrl ? 3 : 0
-
+  let workLinkScore = portfolioUrl ? 2 : 0
+  let workLinkNote = portfolioUrl
+    ? `Link karya terbaca: ${portfolioUrl}`
+    : 'Link karya (GitHub, Behance, atau website pribadi) tidak ditemukan.'
+  if (!portfolioUrl && linkedinScore > 0 && findDomicile(text)) {
+    // Bidang yang tidak memamerkan karya: poin dialihkan sebagian ke LinkedIn + domisili.
+    workLinkScore = 1
+    workLinkNote =
+      'Tidak ada link karya, tapi LinkedIn dan domisili tercantum — 1 dari 2 poin.'
+  }
   const kontakChecks = [
     makeCheck(
-      'email', 'Kontak', 'Email valid', emailScore, 7,
+      'email', 'Kontak', 'Email valid', emailScore, 6,
       emailMatch
-        ? `Email terbaca: ${emailMatch[0]}`
-        : 'Alamat email tidak ditemukan atau formatnya tidak valid. Cantumkan email profesional yang aktif.',
+        ? `6/6 - Email terbaca: ${emailMatch[0]}`
+        : '0/6 - Alamat email tidak ditemukan atau formatnya tidak valid. Cantumkan email profesional yang aktif.',
     ),
     makeCheck(
-      'hp', 'Kontak', 'Nomor HP Indonesia', phoneScore, 6,
+      'hp', 'Kontak', 'Nomor HP Indonesia', phoneScore, 5,
       phone
-        ? `Nomor HP terbaca: ${phone}`
-        : 'Nomor HP Indonesia tidak ditemukan. Cantumkan nomor aktif, misalnya 08xx atau +62 8xx.',
+        ? `5/5 - Nomor HP terbaca: ${phone}`
+        : '0/5 - Nomor HP Indonesia tidak ditemukan. Cantumkan nomor aktif, misalnya 08xx atau +62 8xx.',
     ),
     makeCheck(
-      'linkedin', 'Kontak', 'LinkedIn', linkedinScore, 4,
-      linkedinScore
-        ? 'Tautan LinkedIn tercantum.'
-        : 'Tautan LinkedIn tidak ditemukan. Cantumkan URL profil LinkedIn agar rekruter mudah memverifikasi profilmu.',
+      'linkedin', 'Kontak', 'LinkedIn', linkedinScore, 2,
+      linkedinScore > 0
+        ? '2/2 - Tautan LinkedIn tercantum.'
+        : '0/2 - Tautan LinkedIn tidak ditemukan. Cantumkan URL profil LinkedIn agar rekruter mudah memverifikasi profilmu.',
     ),
     makeCheck(
-      'portofolio', 'Kontak', 'Link portofolio', portfolioScore, 3,
-      portfolioUrl
-        ? `Portofolio terbaca: ${portfolioUrl}`
-        : 'Link portofolio tidak ditemukan. Cantumkan alamat GitHub, Behance, Kaggle, atau website portofolio pribadi (kata "portofolio" saja tanpa alamat tidak dihitung).',
+      'karya', 'Kontak', 'Link karya yang relevan', workLinkScore, 2,
+      `${workLinkScore}/2 - ${workLinkNote}`,
     ),
   ]
 
   // ===== RINGKASAN (maks 10) =====
-  const summarySection = getSection(text, [
-    'ringkasan', 'tentang saya', 'profil', 'summary', 'profile', 'objective', 'tentang',
-  ])
-  const summaryWords = summarySection ? countWords(summarySection) : 0
-  const summaryScore =
-    summaryWords >= 40 ? 10 : summaryWords >= 20 ? 7 : summaryWords >= 8 ? 4 : summaryWords >= 1 ? 2 : 0
+  const summaryWords = summaryText ? countWords(summaryText) : 0
+  const lengthScore =
+    summaryWords >= 20 && summaryWords <= 60
+      ? 4
+      : summaryWords >= 8 && summaryWords <= 19
+        ? 2
+        : summaryWords >= 61 && summaryWords <= 100
+          ? 2
+          : summaryWords >= 1
+            ? 1
+            : 0
+  const role = options.targetRole?.trim() ?? ''
+  const roleWords = role ? significantRoleWords(role) : []
+  let roleMentionScore = 0
+  let roleMentionNote: string
+  if (roleWords.length > 0) {
+    const mentioned = roleWords.filter((w) => hasWord(summaryText, w)).length
+    roleMentionScore = mentioned >= Math.ceil(roleWords.length / 2) ? 3 : mentioned >= 1 ? 1.5 : 0
+    roleMentionNote =
+      mentioned > 0
+        ? `menyebut peran target ("${role}")`
+        : `tidak menyebut peran target ("${role}")`
+  } else {
+    roleMentionScore = ROLE_WORDS.some((w) => hasWord(summaryText, w)) ? 3 : 0
+    roleMentionNote =
+      roleMentionScore > 0
+        ? 'menyebut bidang/peran yang dituju'
+        : 'tidak menyebut peran yang dituju — isi posisi target agar bisa dinilai'
+  }
+  // Bukti terkuat: ringkasan merujuk pencapaian yang juga muncul sebagai bukti.
+  const topForSummary = [...evidence].sort((a, b) => b.score - a.score)[0]
+  let proofMentionScore = 0
+  if (topForSummary) {
+    const topNumbers = topForSummary.text.match(/\d+(?:[.,]\d+)?\s*(%|juta|ribu|orang|klien|proyek|jam|hari|bulan|tahun|people|users?|clients?|customers?|projects?|hours?|days?|months?|years?|teams?|members?|stores?|dollars?|usd)/gi) ?? []
+    const topRolePhrase = topForSummary.title.split(/—|–/)[0]?.trim().toLowerCase() ?? ''
+    const mentionsProof =
+      topNumbers.some((n) => summaryText.toLowerCase().includes(n.toLowerCase())) ||
+      (topRolePhrase.length >= 4 && summaryText.toLowerCase().includes(topRolePhrase))
+    proofMentionScore = mentionsProof ? 3 : /\d/.test(summaryText) ? 1 : 0
+  }
+  const summaryScore = lengthScore + roleMentionScore + proofMentionScore
   const ringkasanChecks = [
     makeCheck(
       'ringkasan', 'Ringkasan', 'Ringkasan profesional', summaryScore, 10,
-      summaryWords === 0
-        ? 'Bagian ringkasan/profil tidak ditemukan. Tambahkan ringkasan 40 kata atau lebih yang menjelaskan keahlian dan pencapaian utamamu.'
-        : `Ringkasan berisi ${summaryWords} kata. ${summaryWords >= 40 ? 'Panjangnya sudah ideal.' : 'Idealnya 40 kata atau lebih agar cukup menjelaskan nilai jualmu.'}`,
+      `${summaryScore}/10 - Ringkasan ${summaryWords} kata (${lengthScore}/4 panjang); ${roleMentionNote} (${roleMentionScore}/3); ` +
+        (proofMentionScore >= 3
+          ? 'merujuk bukti terkuatmu (3/3).'
+          : proofMentionScore > 0
+            ? 'menyebut angka tapi belum merujuk bukti terkuatmu (1/3).'
+            : 'belum merujuk bukti terkuatmu (0/3).'),
     ),
   ]
 
-  // ===== PENGALAMAN (maks 28) =====
-  const hasExperienceHeading =
-    /(pengalaman|experience|pekerjaan|work history|riwayat kerja)/i.test(lower)
-  const experienceHeadingScore = hasExperienceHeading ? 10 : 0
-
-  const verbCount = countActionVerbs(lower)
-  const verbScore = verbCount >= 5 ? 8 : verbCount >= 3 ? 6 : verbCount >= 1 ? 3 : 0
-
-  const measurableCount = countMeasurableResults(text)
-  const measurableScore =
-    measurableCount >= 3 ? 10 : measurableCount === 2 ? 7 : measurableCount === 1 ? 4 : 0
-
-  const pengalamanChecks = [
+  // ===== BUKTI STAR (maks 30) =====
+  // Hanya 3 bukti terbaik yang dihitung (dirata-rata, lalu dikali 3).
+  // Slot kosong bernilai 0: satu bukti sempurna sendirian maksimal 10 dari 30.
+  const ranked = [...evidence].sort((a, b) => b.score - a.score)
+  const top3 = ranked.slice(0, 3)
+  const top3Avg = top3.reduce((sum, e) => sum + e.score, 0) / 3
+  const evidenceScore = Math.round(top3Avg * 3)
+  const extraEvidence = ranked.slice(3).filter((e) => e.score >= 5)
+  const buktiChecks = [
     makeCheck(
-      'pengalaman-heading', 'Pengalaman', 'Bagian pengalaman kerja', experienceHeadingScore, 10,
-      hasExperienceHeading
-        ? 'Bagian pengalaman kerja ditemukan.'
-        : 'Bagian pengalaman kerja tidak ditemukan. Buat bagian "Pengalaman" yang berisi riwayat pekerjaanmu.',
-    ),
-    makeCheck(
-      'kata-kerja-aksi', 'Pengalaman', 'Kata kerja aksi', verbScore, 8,
-      `Ditemukan ${verbCount} kata kerja aksi berbeda (mis. meningkatkan, mengelola, membangun). ${verbCount >= 5 ? 'Sudah bervariasi.' : 'Gunakan minimal 5 kata kerja aksi berbeda untuk menunjukkan peran aktifmu.'}`,
-    ),
-    makeCheck(
-      'hasil-terukur', 'Pengalaman', 'Hasil terukur (angka pencapaian)', measurableScore, 10,
-      `Ditemukan ${measurableCount} angka pencapaian (persen, jumlah, atau nominal — tahun dan nomor HP tidak dihitung). ${measurableCount >= 3 ? 'Sudah meyakinkan.' : 'Tambahkan hasil terukur, misalnya "meningkatkan penjualan 30%" atau "mengelola 15 orang".'}`,
+      'bukti-star', 'Bukti STAR', 'Bukti STAR (3 terbaik)', evidenceScore, 30,
+      `${evidenceScore}/30 - Rata-rata STAR 3 bukti terbaik: ${top3Avg.toFixed(1)} dari 10 ` +
+        `(${top3.length} dari 3 slot terisi). ` +
+        (top3.length === 0
+          ? 'Belum ada bukti yang bisa dinilai. Tambahkan magang, proyek, atau organisasi dengan peran, periode, aksi, dan hasil.'
+          : top3.every((e) => e.reasons.length === 0)
+            ? 'Ketiga bukti sudah lengkap (peran, periode, aksi, hasil).'
+            : `Yang paling sering kurang: ${[...new Set(top3.flatMap((e) => e.reasons))].join('; ')}.`),
     ),
   ]
 
-  // ===== PENDIDIKAN (maks 12) =====
-  const hasEducation =
-    /(pendidikan|education|universitas|sekolah|sma|smk|diploma|sarjana|s1|s2|d3|d4)\b/i.test(lower)
-  const educationScore = hasEducation ? 8 : 0
-
-  const educationSection = getSection(text, ['pendidikan', 'education'])
-  const hasGpa =
-    /(ipk|gpa)\s*[:\-]?\s*[0-4]([.,]\d{1,2})?/i.test(text) ||
-    /\b3[.,]\d{2}\b/.test(educationSection)
+  // ===== PENDIDIKAN & BELAJAR (maks 15) =====
+  const educationText = getSectionText(sections, ['pendidikan'])
+  const hasInstitution = /(universitas|institut|sekolah|sma|smk|politeknik|akademi|university|college|bachelor|master|high school)/i.test(educationText)
+  const eduYears = extractYears(educationText)
+  const eduBaseScore = hasInstitution && eduYears.length > 0 ? 8 : hasInstitution ? 5 : educationText ? 3 : 0
+  // IPK hanya dihitung bila ada DI DALAM bagian pendidikan (bukan di seluruh CV).
+  const hasGpa = /(ipk|gpa)\s*[:\-]?\s*[0-4]([.,]\d{1,2})?/i.test(educationText)
   const gpaScore = hasGpa ? 4 : 0
-
+  const certText = getSectionText(sections, ['sertifikasi'])
+  const certLine = text
+    .split('\n')
+    .find((l) => /(sertifikat|sertifikasi|kursus|bootcamp|pelatihan|certified|certificate|course|training)/i.test(l) && l.trim().length > 15)
+  const hasCert = certText.length > 0 || Boolean(certLine)
+  const certScore = hasCert ? 3 : 0
+  // Aturan pengganti yang adil: IPK + sertifikat digabung, maksimal 7.
+  const learnScore = Math.min(7, gpaScore + certScore)
   const pendidikanChecks = [
     makeCheck(
-      'pendidikan', 'Pendidikan', 'Pendidikan tercantum', educationScore, 8,
-      hasEducation
-        ? 'Informasi pendidikan ditemukan.'
-        : 'Informasi pendidikan tidak ditemukan. Cantumkan jenjang pendidikan terakhir dan nama institusinya.',
+      'pendidikan', 'Pendidikan & Belajar', 'Pendidikan tercantum', eduBaseScore, 8,
+      `${eduBaseScore}/8 - ` +
+        (eduBaseScore >= 8
+          ? 'Institusi, jurusan, dan tahun tercantum.'
+          : eduBaseScore > 0
+            ? 'Institusi tercantum, tapi tahun atau jurusan belum lengkap.'
+            : 'Informasi pendidikan tidak ditemukan. Cantumkan jenjang, institusi, dan tahun.'),
     ),
     makeCheck(
-      'ipk', 'Pendidikan', 'IPK / GPA', gpaScore, 4,
-      hasGpa
-        ? 'IPK/GPA tercantum.'
-        : 'IPK/GPA tidak tercantum. Jika IPK-mu baik (mis. di atas 3,00), cantumkan untuk memperkuat profil.',
+      'ipk-sertifikat', 'Pendidikan & Belajar', 'IPK / sertifikat', learnScore, 7,
+      `${learnScore}/7 - ` +
+        (hasGpa && hasCert
+          ? 'IPK tercantum dan ada sertifikat/pelatihan.'
+          : hasGpa
+            ? 'IPK tercantum (sertifikat bisa menambah sampai 7).'
+            : hasCert
+              ? 'Sertifikat/pelatihan menggantikan IPK — bukti belajar tetap dinilai.'
+              : 'IPK dan sertifikat tidak tercantum. Cantumkan salah satunya.'),
     ),
   ]
 
-  // ===== KEAHLIAN (maks 10) =====
-  const skillsSection = getSection(text, [
-    'keahlian', 'skill', 'kemampuan', 'kompetensi', 'tools', 'teknologi',
-  ])
-  const skillItems = skillsSection
-    ? skillsSection
-        .split(/[\n,;•·|]+/)
-        .map((s) => s.replace(/^\s*[-*]\s*/, '').trim())
-        .filter((s) => s.length >= 2)
-    : []
-  const skillCount = skillItems.length
-  const skillScore =
-    skillCount >= 8 ? 10 : skillCount >= 5 ? 7 : skillCount >= 3 ? 4 : skillCount >= 1 ? 2 : 0
-  const keahlianChecks = [
+  // ===== SKILL RELEVAN (maks 15) =====
+  const skillsText = getSectionText(sections, ['keahlian'])
+  const skillItems = parseSkillItems(skillsText)
+  const provenSkills = skillItems.filter((s) => {
+    const pattern = new RegExp(`\\b${escapeRegExp(s)}\\b`, 'i')
+    return pattern.test(evidenceText)
+  })
+  const unprovenSkills = skillItems.filter((s) => !provenSkills.includes(s))
+  const provenScore =
+    provenSkills.length >= 5 ? 9
+      : provenSkills.length === 4 ? 8
+        : provenSkills.length === 3 ? 6
+          : provenSkills.length === 2 ? 4
+            : provenSkills.length === 1 ? 2
+              : 0
+  const jobDesc = options.jobDesc?.trim() ?? ''
+  const keywords = jobDesc ? extractJobKeywords(jobDesc, lower, evidenceLower) : null
+  let relevanceScore = 0
+  let relevanceNote: string
+  if (keywords) {
+    const inEv = keywords.inEvidence.length
+    relevanceScore = inEv >= 6 ? 6 : inEv >= 4 ? 4 : inEv >= 2 ? 3 : inEv === 1 ? 1 : 0
+    relevanceNote = `${inEv} dari ${keywords.total} kata kunci lowongan ditemukan di dalam bukti`
+  } else if (roleWords.length > 0) {
+    const roleInEvidence = roleWords.filter((w) => hasWord(evidenceLower, w)).length
+    relevanceScore = roleInEvidence >= 2 ? 6 : roleInEvidence === 1 ? 3 : 0
+    relevanceNote =
+      roleInEvidence > 0
+        ? 'skill terbukti selaras dengan posisi target'
+        : 'belum ada skill terbukti yang selaras dengan posisi target'
+  } else {
+    relevanceScore = Math.round((6 * provenScore) / 9)
+    relevanceNote = 'tanpa lowongan/posisi target, dinilai proporsional dari skill terbukti'
+  }
+  const skillChecks = [
     makeCheck(
-      'keahlian', 'Keahlian', 'Daftar keahlian / skill', skillScore, 10,
-      skillCount === 0
-        ? 'Bagian keahlian tidak ditemukan. Buat bagian "Keahlian" dan daftarkan minimal 8 skill yang relevan, pisahkan dengan koma.'
-        : `Ditemukan ${skillCount} item keahlian. ${skillCount >= 8 ? 'Jumlahnya sudah cukup.' : 'Idealnya cantumkan minimal 8 skill yang relevan dengan posisi yang dilamar.'}`,
+      'skill-terbukti', 'Skill Relevan', 'Skill terbukti di bukti', provenScore, 9,
+      `${provenScore}/9 - ${provenSkills.length} dari ${skillItems.length} skill-mu terbukti muncul di dalam bukti` +
+        (unprovenSkills.length > 0
+          ? `; ${unprovenSkills.length} skill hanya klaim dan belum punya bukti.`
+          : '.'),
+    ),
+    makeCheck(
+      'skill-relevan', 'Skill Relevan', 'Relevansi dengan lowongan', relevanceScore, 6,
+      `${relevanceScore}/6 - ${relevanceNote}.`,
     ),
   ]
 
-  // ===== FORMAT & ATS (maks 20) =====
-  const lengthScore =
+  // ===== FORMAT & ATS (maks 15) =====
+  const lengthScore2 =
     totalWords >= 220 && totalWords <= 900
-      ? 10
+      ? 6
       : (totalWords >= 130 && totalWords <= 219) || (totalWords >= 901 && totalWords <= 1100)
-        ? 6
+        ? 4
         : totalWords >= 60 && totalWords <= 129
-          ? 3
+          ? 2
           : 1
-  const hasYears = /\b(19|20)\d{2}\b/.test(text)
-  const yearsScore = hasYears ? 5 : 0
-  const bulletCount = text
-    .split('\n')
-    .filter((line) => /^\s*([\-•*]|\d+[.)])\s+/.test(line)).length
-  const bulletScore = bulletCount >= 6 ? 5 : bulletCount >= 3 ? 3 : bulletCount >= 1 ? 1 : 0
-
+  const mainSections = ['ringkasan', 'pendidikan', 'keahlian'].filter(
+    (k) => sections.some((s) => s.kind === k),
+  ).length + (evidence.length > 0 ? 1 : 0)
+  const structureScore = mainSections >= 4 ? 5 : mainSections === 3 ? 3 : mainSections === 2 ? 2 : mainSections === 1 ? 1 : 0
+  // Bullet dihitung dari baris asli di bagian bukti.
+  const bulletCount = sections
+    .filter((s) => EVIDENCE_KINDS[s.kind])
+    .flatMap((s) => s.lines)
+    .filter((l) => isBulletLine(l)).length
+  const bulletScore = bulletCount >= 6 ? 4 : bulletCount >= 3 ? 2 : bulletCount >= 1 ? 1 : 0
   const formatChecks = [
     makeCheck(
-      'panjang', 'Format & ATS', 'Panjang CV', lengthScore, 10,
-      `CV berisi ${totalWords} kata. Rentang ideal 220–900 kata (sekitar 1–2 halaman).`,
+      'panjang', 'Format & ATS', 'Panjang CV', lengthScore2, 6,
+      `${lengthScore2}/6 - CV berisi ${totalWords} kata. Rentang ideal 220–900 kata (sekitar 1–2 halaman).`,
     ),
     makeCheck(
-      'periode', 'Format & ATS', 'Tahun / periode kerja', yearsScore, 5,
-      hasYears
-        ? 'Tahun/periode tercantum pada riwayatmu.'
-        : 'Tidak ada tahun/periode yang tercantum. Tulis periode kerja dan pendidikan, misalnya 2021–2024.',
+      'struktur', 'Format & ATS', 'Struktur terbaca', structureScore, 5,
+      `${structureScore}/5 - ${mainSections} dari 4 bagian utama terdeteksi (ringkasan, bukti, pendidikan, keahlian).`,
     ),
     makeCheck(
-      'bullet', 'Format & ATS', 'Struktur bullet', bulletScore, 5,
-      `Ditemukan ${bulletCount} baris bullet. ${bulletCount >= 6 ? 'Struktur poin-poinnya sudah rapi.' : 'Susun pencapaianmu dalam poin-poin (bullet) agar mudah dipindai rekruter dan sistem ATS.'}`,
+      'bullet-bukti', 'Format & ATS', 'Bullet pada bukti', bulletScore, 4,
+      `${bulletScore}/4 - Ditemukan ${bulletCount} baris bullet di bagian bukti. Susun pencapaianmu dalam poin-poin agar mudah dipindai rekruter dan sistem ATS.`,
     ),
   ]
 
-  // ===== Agregasi =====
+  // ===== Agregasi: dua skor =====
   const aspectDefs: { name: string; max: number; checks: CheckItem[] }[] = [
-    { name: 'Kontak', max: 20, checks: kontakChecks },
+    { name: 'Kontak', max: 15, checks: kontakChecks },
     { name: 'Ringkasan', max: 10, checks: ringkasanChecks },
-    { name: 'Pengalaman', max: 28, checks: pengalamanChecks },
-    { name: 'Pendidikan', max: 12, checks: pendidikanChecks },
-    { name: 'Keahlian', max: 10, checks: keahlianChecks },
-    { name: 'Format & ATS', max: 20, checks: formatChecks },
+    { name: 'Bukti STAR', max: 30, checks: buktiChecks },
+    { name: 'Pendidikan & Belajar', max: 15, checks: pendidikanChecks },
+    { name: 'Skill Relevan', max: 15, checks: skillChecks },
+    { name: 'Format & ATS', max: 15, checks: formatChecks },
   ]
-
   const aspects: AspectResult[] = aspectDefs.map((a) => ({
     name: a.name,
     max: a.max,
     score: a.checks.reduce((sum, c) => sum + c.score, 0),
     checks: a.checks,
   }))
-
   const allChecks = aspects.flatMap((a) => a.checks)
-  const total = aspects.reduce((sum, a) => sum + a.score, 0)
-  const label =
-    total >= 85
-      ? 'Sangat Siap Dilamar'
-      : total >= 70
-        ? 'Sudah Bagus'
-        : total >= 50
-          ? 'Perlu Perbaikan'
-          : 'Perlu Dirombak Dulu'
+  const rawTotal = aspects.reduce((sum, a) => sum + a.score, 0)
+  const readyScore = applyCap(rawTotal)
+  const readyLabel = labelFor(readyScore)
+
+  // Skor Cocok: mulai dari Skor Siap, disesuaikan kecocokan dengan lowongan.
+  let matchScore: number | null = null
+  if (keywords) {
+    matchScore = applyCap(Math.round(rawTotal * 0.7 + keywords.percent * 0.3))
+  } else if (role) {
+    const roleInEvidence = roleWords.some((w) => hasWord(evidenceLower, w))
+    matchScore = roleInEvidence ? readyScore : applyCap(Math.round(readyScore * 0.85))
+  }
+  const matchLabel = matchScore === null ? null : labelFor(matchScore)
 
   const aspectMaxByName = new Map(aspects.map((a) => [a.name, a.max]))
   const strengths = allChecks.filter((c) => c.status === 'baik')
@@ -498,27 +901,82 @@ export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): Analys
         (aspectMaxByName.get(b.aspect) ?? 0) - (aspectMaxByName.get(a.aspect) ?? 0),
     )
 
-  // ===== Kata kunci lowongan & peringatan posisi (tidak mengubah skor) =====
-  const jobDesc = options.jobDesc?.trim() ?? ''
-  const keywords = jobDesc ? extractJobKeywords(jobDesc, lower) : null
-
-  let roleWarning: string | null = null
-  const role = options.targetRole?.trim() ?? ''
-  if (role) {
-    const firstWord = role.toLowerCase().match(/[a-z]+/)?.[0] ?? ''
-    if (firstWord && !lower.includes(firstWord)) {
-      roleWarning = `Posisi target "${role}" tidak disebut di dalam CV. Sebutkan posisi atau bidang ini di ringkasan atau pengalamanmu agar CV terlihat relevan.`
+  // ===== Peringatan (tidak mengurangi skor diam-diam) =====
+  const consistencyWarnings: string[] = []
+  if (unprovenSkills.length > 0) {
+    consistencyWarnings.push(
+      `Skill belum terbukti: ${unprovenSkills.slice(0, 5).join(', ')}${unprovenSkills.length > 5 ? `, dan ${unprovenSkills.length - 5} lainnya` : ''} — hanya klaim, belum muncul di bukti mana pun. Tambahkan buktinya, bukan tambah skillnya.`,
+    )
+  }
+  // Periode bertabrakan: dua bukti kerja penuh waktu dengan rentang tahun yang sama persis.
+  const workEvidence = evidence.filter((e) => e.source === 'kerja')
+  const seenRanges = new Map<string, string>()
+  for (const e of workEvidence) {
+    const years = extractYears(e.text)
+    if (years.length >= 2) {
+      const range = `${years[0]}-${years[years.length - 1]}`
+      const prev = seenRanges.get(range)
+      if (prev) {
+        consistencyWarnings.push(
+          `Periode bertabrakan: "${prev}" dan "${e.title}" sama-sama ${range}. Periksa lagi tanggalnya.`,
+        )
+      } else {
+        seenRanges.set(range, e.title)
+      }
     }
   }
 
+  // Peringatan posisi: pakai frasa posisi, bukan kata pertama saja.
+  let roleWarning: string | null = null
+  if (role && roleWords.length > 0) {
+    const inCv = roleWords.some((w) => hasWord(lower, w))
+    const inEvidence = roleWords.some((w) => hasWord(evidenceLower, w))
+    if (!inCv) {
+      roleWarning = `Posisi target "${role}" tidak disebut di dalam CV. Sebutkan posisi atau bidang ini di ringkasan atau buktimu agar CV terlihat relevan.`
+    } else if (!inEvidence) {
+      roleWarning = `Posisi target "${role}" disebut di CV, tapi belum ada bukti (pengalaman/proyek) yang mendukungnya.`
+    }
+  }
+
+  // Catatan pindah mode (mode adalah batas bawah, bukan batas atas).
+  let modeNote: string | null = null
+  if (mode === 'fresh') {
+    const longWork = workEvidence.some((e) => {
+      const years = extractYears(e.text)
+      if (years.length >= 2) return years[years.length - 1] - years[0] >= 2
+      if (years.length === 1 && /sekarang|saat ini/i.test(e.text)) {
+        return new Date().getFullYear() - years[0] >= 2
+      }
+      return false
+    })
+    if (longWork) {
+      modeNote =
+        'Pengalamanmu sudah setara Berpengalaman (kerja penuh waktu lebih dari 1 tahun). Coba ganti mode ke Berpengalaman agar penilaiannya lebih tepat. Keputusan tetap di tanganmu.'
+    }
+  } else if (workEvidence.length === 0) {
+    modeNote =
+      'Belum ada pengalaman kerja yang terdeteksi. Bila kamu baru lulus, coba mode Fresh Graduate agar magang dan proyekmu ikut dinilai.'
+  }
+
   return {
-    total,
-    label,
+    total: readyScore,
+    label: readyLabel,
+    readyScore,
+    readyLabel,
+    rawTotal,
+    matchScore,
+    matchLabel,
+    mode,
+    cvLanguage,
     aspects,
     strengths,
     priorities,
+    topEvidence: top3,
+    extraEvidence,
     keywords,
     roleWarning,
+    modeNote,
+    consistencyWarnings,
     portfolioUrl,
     wordCount: totalWords,
   }

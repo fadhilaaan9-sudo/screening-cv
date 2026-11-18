@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
-import { analyzeCv, countWords, type AnalysisResult, type CheckItem } from './lib/analyze'
+import { analyzeCv, countWords, type AnalysisResult, type CandidateMode, type CheckItem } from './lib/analyze'
 import { requestAiAnalysis, requestAiAnalysisStreaming, type AiAnalysis } from './lib/ai'
 import { SAMPLE_CV } from './lib/sampleCv'
 import { extractTextFromFile } from './lib/readFile'
@@ -83,18 +83,19 @@ function CheckRow({ check }: { check: CheckItem }) {
 }
 
 const ATS_TIPS = [
-  'Gunakan heading standar yang mudah dikenali sistem ATS: Ringkasan, Pengalaman, Pendidikan, Keahlian.',
+  'Gunakan heading standar yang mudah dikenali sistem ATS: Ringkasan, Pengalaman, Magang, Proyek, Pendidikan, Keahlian.',
   'Tulis pencapaian dengan angka: persen, jumlah orang/proyek, atau nominal — bukan hanya daftar tugas.',
   'Mulai setiap poin pengalaman dengan kata kerja aksi, misalnya meningkatkan, mengelola, membangun.',
   'Samakan kata kunci penting dari deskripsi lowongan dengan isi CV-mu secara jujur.',
   'Jaga panjang CV di kisaran 220–900 kata (1–2 halaman) dan susun dengan bullet yang rapi.',
-  'Cantumkan kontak lengkap: email, nomor HP, LinkedIn, dan link portofolio.',
+  'Cantumkan kontak lengkap: email, nomor HP, LinkedIn, dan link karya.',
 ]
 
 export default function App() {
   const [cvText, setCvText] = useState('')
   const [targetRole, setTargetRole] = useState('')
   const [jobDesc, setJobDesc] = useState('')
+  const [mode, setMode] = useState<CandidateMode>('fresh')
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [fileName, setFileName] = useState('')
   const [error, setError] = useState('')
@@ -153,7 +154,7 @@ export default function App() {
       setError('Teks CV masih terlalu pendek. Upload file CV atau tempel teks CV terlebih dahulu.')
       return
     }
-    setResult(analyzeCv(cvText, { targetRole, jobDesc }))
+    setResult(analyzeCv(cvText, { targetRole, jobDesc, mode }))
     requestAnimationFrame(() => {
       resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
@@ -161,6 +162,7 @@ export default function App() {
 
   function handleSample() {
     setCvText(SAMPLE_CV)
+    setMode('experienced')
     setFileName('')
     setError('')
   }
@@ -169,6 +171,7 @@ export default function App() {
     setCvText('')
     setTargetRole('')
     setJobDesc('')
+    setMode('fresh')
     setResult(null)
     setFileName('')
     setError('')
@@ -236,11 +239,20 @@ export default function App() {
     if (!result) return
     const lines: string[] = [
       `HASIL SCREENING CV`,
-      `Skor: ${result.total}/100 — ${result.label}`,
+      `Mode: ${result.mode === 'fresh' ? 'Fresh Graduate' : 'Berpengalaman'}`,
+      `Skor Siap: ${result.readyScore}/100 — ${result.readyLabel}`,
+      ...(result.matchScore !== null
+        ? [`Skor Cocok: ${result.matchScore}/100 — ${result.matchLabel ?? ''}`]
+        : ['Skor Cocok: - (isi posisi target / deskripsi lowongan)']),
       `Total kata: ${result.wordCount}`,
       '',
       'SKOR PER ASPEK:',
       ...result.aspects.map((a) => `- ${a.name}: ${a.score}/${a.max}`),
+      '',
+      'BUKTI TERBAIK (STAR):',
+      ...(result.topEvidence.length
+        ? result.topEvidence.map((e) => `- ${e.title} — ${e.score}/10`)
+        : ['- (belum ada)']),
       '',
       'KEKUATAN:',
       ...(result.strengths.length
@@ -253,11 +265,17 @@ export default function App() {
         : ['- Tidak ada, semua pemeriksaan lolos.']),
     ]
     if (result.keywords) {
-      lines.push('', `KECOCOKAN KATA KUNCI LOWONGAN: ${result.keywords.percent}%`)
-      lines.push(`Ketemu: ${result.keywords.found.join(', ') || '-'}`)
+      lines.push('', `KECOCOKAN KATA KUNCI LOWONGAN: ${result.keywords.percent}% ditemukan di bukti`)
+      lines.push(`Di bukti: ${result.keywords.inEvidence.join(', ') || '-'}`)
+      lines.push(`Hanya klaim: ${result.keywords.inCvOnly.join(', ') || '-'}`)
       lines.push(`Belum ada: ${result.keywords.missing.join(', ') || '-'}`)
     }
     if (result.roleWarning) lines.push('', `CATATAN POSISI: ${result.roleWarning}`)
+    if (result.modeNote) lines.push('', `CATATAN MODE: ${result.modeNote}`)
+    if (result.consistencyWarnings.length > 0) {
+      lines.push('', 'PERINGATAN KONSISTENSI:')
+      for (const w of result.consistencyWarnings) lines.push(`- ${w}`)
+    }
     const text = lines.join('\n')
     try {
       await navigator.clipboard.writeText(text)
@@ -281,10 +299,10 @@ export default function App() {
           <span className="badge"><Icon d={I.zap} size={14} /> Penilaian CV Bahasa Indonesia</span>
           <h1>Screening CV</h1>
           <p className="hero-sub">
-            Masukkan CV-mu, dapatkan skor 0–100 dari 6 aspek dan 14 pemeriksaan,
-            lengkap dengan bagian mana saja yang harus diperbaiki. Analisis standar
-            berjalan 100% di browser — file CV tidak diunggah ke server mana pun.
-            Ada juga Analisis AI opsional untuk saran penulisan ulang.
+            Masukkan CV-mu, dapatkan Skor Siap 0–95 dan — bila ada lowongan — Skor Cocok
+            dengan lowongan itu. Skor dihitung dari bukti (magang, proyek, organisasi,
+            pengalaman kerja), bukan dari jumlah kata. Setiap poin disertai alasannya.
+            Analisis standar berjalan 100% di browser — file CV tidak diunggah ke server mana pun.
           </p>
           <div className="hero-actions">
             <a className="btn btn-primary" href="#analisis"><Icon d={I.chart} size={18} /> Mulai Analisis</a>
@@ -293,9 +311,9 @@ export default function App() {
             </button>
           </div>
           <div className="hero-stats">
-            <div><strong>100</strong><span>total poin</span></div>
+            <div><strong>95</strong><span>skor tertinggi realistis</span></div>
             <div><strong>6</strong><span>aspek dinilai</span></div>
-            <div><strong>14</strong><span>pemeriksaan</span></div>
+            <div><strong>3</strong><span>bukti terbaik dihitung</span></div>
           </div>
         </div>
       </header>
@@ -305,20 +323,20 @@ export default function App() {
         <div className="step-card">
           <span className="step-num">1</span>
           <Icon d={I.upload} size={22} />
-          <h3>Masukkan CV</h3>
-          <p>Upload PDF, DOCX, atau TXT — atau tempel teks CV langsung di form.</p>
+          <h3>Pilih mode & masukkan CV</h3>
+          <p>Pilih Fresh Graduate atau Berpengalaman, lalu upload PDF, DOCX, atau TXT — atau tempel teks CV langsung di form.</p>
         </div>
         <div className="step-card">
           <span className="step-num">2</span>
           <Icon d={I.target} size={22} />
-          <h3>Isi posisi &amp; lowongan</h3>
-          <p>Opsional: posisi target dan deskripsi lowongan untuk cek kata kunci.</p>
+          <h3>Isi posisi & lowongan</h3>
+          <p>Opsional: posisi target dan deskripsi lowongan untuk mengaktifkan Skor Cocok.</p>
         </div>
         <div className="step-card">
           <span className="step-num">3</span>
           <Icon d={I.list} size={22} />
-          <h3>Lihat hasil &amp; perbaiki</h3>
-          <p>Skor per aspek, kekuatan, dan prioritas perbaikan yang terurut.</p>
+          <h3>Lihat dua skor & perbaiki</h3>
+          <p>Skor Siap dan Skor Cocok, bukti STAR terbaikmu, dan prioritas perbaikan yang terurut.</p>
         </div>
       </section>
 
@@ -343,7 +361,7 @@ export default function App() {
             tabIndex={0}
           >
             <Icon d={I.upload} size={26} />
-            <p><strong>Tarik &amp; letakkan file CV di sini</strong><br />atau klik untuk memilih file (PDF, DOCX, TXT)</p>
+            <p><strong>Tarik & letakkan file CV di sini</strong><br />atau klik untuk memilih file (PDF, DOCX, TXT)</p>
             {fileName && <span className="file-name">{fileName}</span>}
             {loadingFile && <span className="file-name">Membaca file…</span>}
           </div>
@@ -358,6 +376,31 @@ export default function App() {
               e.target.value = ''
             }}
           />
+
+          <label className="field">
+            <span>Status kamu</span>
+            <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                className={`btn ${mode === 'fresh' ? 'btn-primary' : 'btn-secondary'}`}
+                type="button"
+                onClick={() => setMode('fresh')}
+              >
+                Fresh Graduate
+              </button>
+              <button
+                className={`btn ${mode === 'experienced' ? 'btn-primary' : 'btn-secondary'}`}
+                type="button"
+                onClick={() => setMode('experienced')}
+              >
+                Berpengalaman
+              </button>
+            </span>
+            <small className="counter">
+              {mode === 'fresh'
+                ? 'Magang, proyek, organisasi, dan tugas akhir ikut dinilai sebagai bukti.'
+                : 'Pengalaman kerja jadi sumber bukti utama; magang dan proyek tetap diakui.'}
+            </small>
+          </label>
 
           <label className="field">
             <span>Teks CV</span>
@@ -385,7 +428,7 @@ export default function App() {
             <textarea
               value={jobDesc}
               onChange={(e) => setJobDesc(e.target.value)}
-              placeholder="Tempel deskripsi lowongan untuk mengecek kecocokan kata kunci dengan CV-mu."
+              placeholder="Tempel deskripsi lowongan untuk mengaktifkan Skor Cocok dengan lowongan itu."
               rows={5}
             />
           </label>
@@ -415,9 +458,9 @@ export default function App() {
                 <div>
                   <h3>Seperti ini tampilan hasilmu nanti</h3>
                   <p>
-                    Skor keseluruhan, label kesiapan, rincian per aspek, daftar kekuatan,
-                    prioritas perbaikan, dan cek kata kunci lowongan. Isi form di samping
-                    lalu klik <strong>Analisis CV</strong>.
+                    Skor Siap dan Skor Cocok, rincian per aspek beserta alasannya, bukti STAR
+                    terbaikmu, daftar kekuatan, prioritas perbaikan, dan cek kata kunci lowongan.
+                    Isi form di samping lalu klik <strong>Analisis CV</strong>.
                   </p>
                 </div>
               </div>
@@ -426,14 +469,42 @@ export default function App() {
             <>
               <div className="card result-card">
                 <div className="result-top">
-                  <ScoreRing score={result.total} />
+                  <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                    <div style={{ textAlign: 'center' }}>
+                      <ScoreRing score={result.readyScore} />
+                      <p style={{ marginTop: 8, fontWeight: 700 }}>Skor Siap</p>
+                    </div>
+                    {result.matchScore !== null ? (
+                      <div style={{ textAlign: 'center' }}>
+                        <ScoreRing score={result.matchScore} />
+                        <p style={{ marginTop: 8, fontWeight: 700 }}>Skor Cocok</p>
+                      </div>
+                    ) : (
+                      <div style={{ maxWidth: 220, textAlign: 'left', paddingTop: 24 }}>
+                        <p style={{ fontSize: 14, color: '#475569', lineHeight: 1.6 }}>
+                          <strong>Skor Cocok</strong> belum ada. Isi posisi target atau deskripsi
+                          lowongan, lalu analisis ulang untuk melihat seberapa cocok CV-mu dengan
+                          lowongan itu.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                   <div className="result-summary">
-                    <span className="badge badge-soft">Hasil analisis</span>
-                    <h2>{result.label}</h2>
+                    <span className="badge badge-soft">Hasil analisis • {result.mode === 'fresh' ? 'Fresh Graduate' : 'Berpengalaman'}</span>
+                    <h2>{result.readyLabel}</h2>
                     <p>
                       CV berisi {result.wordCount} kata. Skor dihitung dari bukti isi yang
-                      benar-benar ada — bagian yang kosong poinnya 0.
+                      benar-benar ada — bagian yang kosong poinnya 0. Skor tertinggi yang
+                      realistis adalah 95: selalu ada lowongan yang menuntut bukti lain.
                     </p>
+                    {result.matchScore !== null && (
+                      <p>
+                        <strong>Skor Cocok {result.matchScore}/100 ({result.matchLabel})</strong> —{' '}
+                        {result.matchScore >= result.readyScore
+                          ? 'CV-mu cocok dengan lowongan ini.'
+                          : 'CV-mu kurang cocok dengan lowongan ini dibanding kesiapan umumnya.'}
+                      </p>
+                    )}
                     <button className="btn btn-secondary" type="button" onClick={handleCopyReport}>
                       <Icon d={I.copy} size={16} /> {copied ? 'Laporan tersalin!' : 'Salin Laporan'}
                     </button>
@@ -455,10 +526,52 @@ export default function App() {
                   ))}
                 </div>
 
+                {result.modeNote && (
+                  <div className="alert alert-warn"><Icon d={I.alert} size={16} /> {result.modeNote}</div>
+                )}
+
                 {result.roleWarning && (
                   <div className="alert alert-warn"><Icon d={I.alert} size={16} /> {result.roleWarning}</div>
                 )}
+
+                {result.consistencyWarnings.length > 0 && (
+                  <div className="alert alert-warn">
+                    <Icon d={I.alert} size={16} />{' '}
+                    {result.consistencyWarnings.map((w, i) => (
+                      <span key={i} style={{ display: 'block', marginTop: i === 0 ? 0 : 6 }}>{w}</span>
+                    ))}
+                  </div>
+                )}
               </div>
+
+              {result.topEvidence.length > 0 && (
+                <div className="card">
+                  <h3><Icon d={I.check} size={18} /> Bukti Terbaik (STAR)</h3>
+                  <ul className="check-list">
+                    {result.topEvidence.map((e, i) => (
+                      <li className="check-row status-baik" key={`${e.title}-${i}`}>
+                        <span className="check-icon"><Icon d={I.check} size={15} /></span>
+                        <div className="check-body">
+                          <div className="check-head">
+                            <strong>{e.title}</strong>
+                            <span className="check-meta">STAR {e.score}/10</span>
+                          </div>
+                          <p>
+                            Peran {e.roleScore}/2,5 • Periode {e.periodScore}/2,5 • Aksi {e.actionScore}/2,5 • Hasil {e.resultScore}/2,5
+                            {e.reasons.length > 0 ? ` — kurang: ${e.reasons.join('; ')}.` : '.'}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  {result.extraEvidence.length > 0 && (
+                    <p>
+                      Kamu punya {result.extraEvidence.length} bukti kuat lain di luar 3 terbaik:{' '}
+                      {result.extraEvidence.map((e) => e.title).join('; ')}.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {result.strengths.length > 0 && (
                 <div className="card">
@@ -485,14 +598,22 @@ export default function App() {
                   <h3><Icon d={I.target} size={18} /> Kecocokan Kata Kunci Lowongan</h3>
                   <p>
                     <strong>{result.keywords.percent}%</strong> dari {result.keywords.total} kata kunci
-                    teratas lowongan ditemukan di CV-mu. Bagian ini ditampilkan terpisah dan
-                    <strong> tidak mengubah skor utama</strong>.
+                    teratas lowongan ditemukan <strong>di dalam bukti</strong>. Bagian ini menjelaskan
+                    Skor Cocok, bukan skor terpisah yang membingungkan.
                   </p>
                   <div className="chips-group">
-                    <span className="chips-title">Sudah ada:</span>
+                    <span className="chips-title">Ditemukan di bukti:</span>
                     <div className="chips">
-                      {result.keywords.found.length
-                        ? result.keywords.found.map((k) => <span key={k} className="chip chip-ok">{k}</span>)
+                      {result.keywords.inEvidence.length
+                        ? result.keywords.inEvidence.map((k) => <span key={k} className="chip chip-ok">{k}</span>)
+                        : <span className="chip">—</span>}
+                    </div>
+                  </div>
+                  <div className="chips-group">
+                    <span className="chips-title">Hanya klaim (di CV, bukan di bukti):</span>
+                    <div className="chips">
+                      {result.keywords.inCvOnly.length
+                        ? result.keywords.inCvOnly.map((k) => <span key={k} className="chip">{k}</span>)
                         : <span className="chip">—</span>}
                     </div>
                   </div>
@@ -514,7 +635,9 @@ export default function App() {
                   Mau saran yang lebih dalam dari skor di atas? AI lewat OpenRouter bisa membaca
                   CV-mu secara kualitatif: menulis ulang poin pengalamanmu, menunjukkan
                   kekurangan terhadap lowongan, dan memberi contoh ringkasan profil.
-                  Bagian ini terpisah dan <strong>tidak mengubah skor utama</strong>.
+                  Bagian ini terpisah dan <strong>tidak mengubah skor utama</strong>. Model yang
+                  dipakai adalah <strong>NVIDIA Nemotron 3 Ultra 550B (gratis)</strong> — hanya
+                  untuk testing, bisa lambat atau kena rate limit.
                 </p>
 
                 <label className="consent-row">
@@ -524,8 +647,8 @@ export default function App() {
                     onChange={(e) => setAiConsent(e.target.checked)}
                   />
                   <span>
-                    Saya setuju teks CV dikirim ke OpenRouter (model Gemma 4 31B) untuk dianalisis.
-                    Teks tidak disimpan oleh Screening CV.
+                    Saya setuju teks CV dikirim ke OpenRouter (model NVIDIA Nemotron 3 Ultra 550B, gratis) untuk dianalisis.
+                    Hasil analisis berbahasa Indonesia, walau CV berbahasa Inggris (saran tulis ulang tetap dalam bahasa CV). Teks tidak disimpan oleh Screening CV.
                   </span>
                 </label>
 
@@ -634,22 +757,22 @@ export default function App() {
           <div className="card">
             <h3><Icon d={I.book} size={18} /> Bagaimana skor dihitung?</h3>
             <p>
-              Penilaian berbasis aturan (rule-based) dengan total <strong>100 poin</strong> dari
-              <strong> 6 aspek</strong> dan <strong>14 pemeriksaan</strong>. Poin hanya diberikan
-              untuk bukti isi yang benar-benar ada di CV:
+              Penilaian berbasis bukti (rule-based) dengan total <strong>100 poin</strong> dari{' '}
+              <strong>6 aspek</strong>, ditampilkan dengan plafon realistis <strong>95</strong>.
+              Poin hanya diberikan untuk bukti isi yang benar-benar ada di CV:
             </p>
             <ul className="rules-list">
-              <li><strong>Kontak — 20 poin:</strong> email valid (7), nomor HP Indonesia (6), LinkedIn (4), link portofolio (3). Format HP 08xx, +62, maupun bertanda kurung dengan spasi/strip/titik tetap terbaca.</li>
-              <li><strong>Ringkasan — 10 poin:</strong> dinilai dari panjang isi ringkasan; 40 kata atau lebih = poin penuh.</li>
-              <li><strong>Pengalaman — 28 poin:</strong> bagian pengalaman (10), variasi kata kerja aksi (8), dan angka pencapaian seperti persen/jumlah/nominal (10) — tahun dan nomor HP tidak dihitung sebagai pencapaian.</li>
-              <li><strong>Pendidikan — 12 poin:</strong> pendidikan tercantum (8) dan IPK/GPA (4).</li>
-              <li><strong>Keahlian — 10 poin:</strong> dihitung dari jumlah item skill yang tercantum; 8 item atau lebih = poin penuh.</li>
-              <li><strong>Format &amp; ATS — 20 poin:</strong> panjang ideal 220–900 kata (10), tahun/periode tercantum (5), struktur bullet (5).</li>
+              <li><strong>Kontak — 15 poin:</strong> email valid (6), nomor HP Indonesia (5), LinkedIn (2), link karya (2). Format HP 08xx, +62, maupun bertanda kurung dengan spasi/strip/titik tetap terbaca.</li>
+              <li><strong>Ringkasan — 10 poin:</strong> panjang cukup 20–60 kata (4), menyebut peran target (3), merujuk bukti terkuat (3).</li>
+              <li><strong>Bukti STAR — 30 poin:</strong> setiap bukti (kerja, magang, proyek, organisasi, tugas akhir, freelance) dinilai Peran, Periode, Aksi, Hasil — masing-masing 2,5 poin. Hanya 3 bukti terbaik yang dihitung (dirata-rata, lalu dikali 3). Kata kerja dan angka hanya dihitung bila berada di dalam bukti.</li>
+              <li><strong>Pendidikan &amp; Belajar — 15 poin:</strong> pendidikan tercantum (8), IPK atau sertifikat/pelatihan (gabungan maksimal 7 — sertifikat bisa menggantikan IPK).</li>
+              <li><strong>Skill Relevan — 15 poin:</strong> skill yang terbukti muncul di dalam bukti (9) dan relevansi dengan lowongan (6). Skill yang hanya diklaim di daftar bernilai 0.</li>
+              <li><strong>Format &amp; ATS — 15 poin:</strong> panjang ideal 220–900 kata (6), struktur terbaca (5), bullet pada bukti (4).</li>
             </ul>
             <p>
-              Label skor: 85+ Sangat Siap Dilamar • 70–84 Sudah Bagus • 50–69 Perlu Perbaikan •
-              di bawah 50 Perlu Dirombak Dulu. Cek kata kunci lowongan ditampilkan terpisah dan
-              tidak mengubah skor utama.
+              Label skor: 85–95 Sangat Siap Dilamar • 70–84 Sudah Bagus • 50–69 Perlu Perbaikan •
+              di bawah 50 Perlu Dirombak Dulu. Skor Cocok dihitung bila ada lowongan: 70% Skor Siap
+              + 30% kata kunci lowongan yang ditemukan di dalam bukti.
             </p>
           </div>
 
@@ -665,11 +788,11 @@ export default function App() {
 
       <footer className="footer">
         <p>
-          Penilaian standar berbasis aturan (rule-based) dan berjalan sepenuhnya di
+          Penilaian standar berbasis bukti (rule-based) dan berjalan sepenuhnya di
           browser kamu — bukan keputusan rekruter, dan tidak ada data yang diunggah
-          atau disimpan. Satu-satunya pengecualian: fitur Analisis AI (opsional)
-          mengirim teks CV ke OpenRouter hanya bila kamu mencentang persetujuan,
-          dan teks itu tidak disimpan oleh Screening CV.
+          atau disimpan. Skor tertinggi yang realistis adalah 95. Satu-satunya pengecualian:
+          fitur Analisis AI (opsional, hanya untuk testing) mengirim teks CV ke OpenRouter
+          hanya bila kamu mencentang persetujuan, dan teks itu tidak disimpan oleh Screening CV.
         </p>
       </footer>
     </div>

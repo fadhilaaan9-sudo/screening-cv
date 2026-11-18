@@ -1,9 +1,9 @@
-// Backend Analisis AI — Vercel Serverless Function.
+// Backend Analisis AI - Vercel Serverless Function.
 //
-// Alur: browser → POST /api/analyze-ai → fungsi ini → OpenRouter → JSON kembali ke browser.
+// Alur: browser - POST /api/analyze-ai → fungsi ini → OpenRouter → JSON kembali ke browser.
 // API key hanya dibaca dari environment variable server (OPENROUTER_API_KEY) dan
 // tidak pernah dikirim ke frontend. Isi CV hanya diteruskan ke OpenRouter untuk
-// dianalisis — tidak dicatat ke log dan tidak disimpan di mana pun.
+// dianalisis - tidak dicatat ke log dan tidak disimpan di mana pun.
 
 interface AiRequest {
   method?: string
@@ -86,7 +86,16 @@ function clientIp(req: AiRequest): string {
 }
 
 const SYSTEM_PROMPT =
-  'Kamu adalah konsultan karier berbahasa Indonesia. Balas HANYA dengan JSON valid sesuai skema yang diminta — tanpa markdown, tanpa pagar kode, tanpa teks pembuka/penutup. Jangan mengarang pengalaman, perusahaan, atau angka yang tidak ada di CV.'
+  'Kamu adalah konsultan karier berbahasa Indonesia. CV yang kamu baca bisa berbahasa Indonesia atau Inggris — pahami dalam bahasa aslinya, jangan terjemahkan nama, perusahaan, atau angka. Balas HANYA dengan JSON valid sesuai skema yang diminta — tanpa markdown, tanpa pagar kode, tanpa teks pembuka/penutup. Semua penjelasanmu dalam Bahasa Indonesia; hanya isi field saran (versi tulis ulang) yang memakai bahasa asli CV agar bisa langsung ditempel kembali. Jangan mengarang pengalaman, perusahaan, atau angka yang tidak ada di CV.'
+
+// Bahasa CV ditebak dari kata penanda — sama seperti di src/lib/analyze.ts.
+// Dipakai hanya untuk aturan bahasa prompt, bukan untuk skor.
+function detectAiCvLanguage(cvText: string): 'id' | 'en' {
+  const words = new Set(cvText.toLowerCase().split(/[^a-z]+/))
+  const idCount = ['yang', 'dan', 'dengan', 'saya', 'pengalaman', 'pendidikan', 'magang', 'proyek'].filter((w) => words.has(w)).length
+  const enCount = ['the', 'and', 'with', 'experience', 'education', 'internship', 'project', 'managed'].filter((w) => words.has(w)).length
+  return enCount > idCount ? 'en' : 'id'
+}
 
 function buildPrompt(cvText: string, targetRole: string, jobDesc: string): string {
   const rolePart = targetRole
@@ -97,6 +106,7 @@ function buildPrompt(cvText: string, targetRole: string, jobDesc: string): strin
     : '\n(Tidak ada deskripsi lowongan — nilai kekurangan umum CV saja.)\n'
   return [
     'Kamu adalah konsultan karier berbahasa Indonesia yang membantu pencari kerja dan fresh graduate memperbaiki CV.',
+    'BAHASA CV: ' + (detectAiCvLanguage(cvText) === 'en' ? 'Inggris' : 'Indonesia') + ' — pahami CV dalam bahasa aslinya, jangan terjemahkan nama, perusahaan, atau angka.',
     'Analisis CV berikut dan balas HANYA dengan JSON valid (tanpa markdown, tanpa teks lain) dengan skema persis ini:',
     '{',
     '  "ringkasan": "penilaian kualitatif CV dalam 2-3 kalimat",',
@@ -112,7 +122,8 @@ function buildPrompt(cvText: string, targetRole: string, jobDesc: string): strin
       ? '- kekurangan: nilai kesenjangan (gap) CV terhadap deskripsi lowongan secara MAKNA — skill/pengalaman yang dituntut lowongan tapi belum tampak di CV, bukan sekadar daftar kata kunci yang hilang.'
       : '- kekurangan: nilai kekurangan umum CV (struktur, kejelasan, bukti pencapaian, kelengkapan bagian).',
     '- saranRingkasan: tulis berdasarkan fakta di CV saja, jangan menambah klaim baru.',
-    '- Seluruh jawaban dalam Bahasa Indonesia yang jelas dan suportif.',
+    '- Bahasa hasil: ringkasan, kekurangan, alasan, dan saranRingkasan SELALU dalam Bahasa Indonesia yang jelas dan suportif.',
+    '- saranPenulisanUlang: field asli salin apa adanya dari CV; field saran tulis ulang DALAM BAHASA ASLI CV (Inggris bila CV Inggris, Indonesia bila CV Indonesia) agar bisa langsung ditempel kembali ke CV; field alasan dalam Bahasa Indonesia.',
     rolePart,
     jobPart,
     'TEKS CV:',

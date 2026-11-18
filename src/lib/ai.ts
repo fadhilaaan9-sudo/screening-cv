@@ -32,6 +32,12 @@ export async function requestAiAnalysis(input: AiRequestInput): Promise<AiAnalys
     throw new Error('Tidak bisa menghubungi server Analisis AI. Periksa koneksimu lalu coba lagi.')
   }
 
+  if (response.status === 404) {
+    throw new Error(
+      'Endpoint Analisis AI tidak ditemukan. Kamu menjalankan "npm run dev" (hanya website, tanpa server AI). Jalankan "npm run dev:ai" agar AI jalan di lokal.',
+    )
+  }
+
   let data: unknown = null
   try {
     data = await response.json()
@@ -45,6 +51,12 @@ export async function requestAiAnalysis(input: AiRequestInput): Promise<AiAnalys
         ? String((data as { error: unknown }).error)
         : 'Analisis AI gagal. Coba lagi nanti.'
     throw new Error(message)
+  }
+
+  if (!data || typeof data !== 'object') {
+    throw new Error(
+      'Server Analisis AI tidak membalas JSON. Kamu mungkin menjalankan "npm run dev" (tanpa server AI) — jalankan "npm run dev:ai".',
+    )
   }
 
   return data as AiAnalysis
@@ -75,6 +87,12 @@ export async function requestAiAnalysisStreaming(
     })
   } catch {
     throw new Error('Tidak bisa menghubungi server Analisis AI. Periksa koneksimu lalu coba lagi.')
+  }
+
+  if (response.status === 404) {
+    throw new Error(
+      'Endpoint Analisis AI tidak ditemukan. Kamu menjalankan "npm run dev" (hanya website, tanpa server AI). Jalankan "npm run dev:ai" agar AI jalan di lokal.',
+    )
   }
 
   if (!response.ok) {

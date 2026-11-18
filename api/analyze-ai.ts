@@ -32,7 +32,7 @@ interface AiResult {
   ringkasan: string
   saranPenulisanUlang: RewriteItem[]
   kekurangan: string[]
-  saranRingkasan: string
+  saranUntukLowongan: string
 }
 
 const MAX_CV_CHARS = 12_000
@@ -112,7 +112,7 @@ function buildPrompt(cvText: string, targetRole: string, jobDesc: string): strin
     '  "ringkasan": "penilaian kualitatif CV dalam 2-3 kalimat",',
     '  "saranPenulisanUlang": [ { "asli": "kalimat/poin asli dari CV", "saran": "versi penulisan ulang", "alasan": "kenapa versi baru lebih baik" } ],',
     '  "kekurangan": [ "kekurangan CV, maksimal 6 butir" ],',
-    '  "saranRingkasan": "contoh ringkasan profil 2-3 kalimat berdasarkan isi CV"',
+    '  "saranUntukLowongan": "saran konsultan karier/HRD untuk lowongan yang dilamar, 3-5 kalimat"',
     '}',
     '',
     'Aturan ketat:',
@@ -121,8 +121,9 @@ function buildPrompt(cvText: string, targetRole: string, jobDesc: string): strin
     jobDesc
       ? '- kekurangan: nilai kesenjangan (gap) CV terhadap deskripsi lowongan secara MAKNA — skill/pengalaman yang dituntut lowongan tapi belum tampak di CV, bukan sekadar daftar kata kunci yang hilang.'
       : '- kekurangan: nilai kekurangan umum CV (struktur, kejelasan, bukti pencapaian, kelengkapan bagian).',
-    '- saranRingkasan: tulis berdasarkan fakta di CV saja, jangan menambah klaim baru.',
-    '- Bahasa hasil: ringkasan, kekurangan, alasan, dan saranRingkasan SELALU dalam Bahasa Indonesia yang jelas dan suportif.',
+    '- saranUntukLowongan: tulis dari sudut pandang HRD/konsultan karier yang membaca CV ini untuk lowongan tersebut: apa yang dicari lowongan itu, pengalaman/skill mana dari CV yang paling cocok dan harus ditonjolkan, apa yang masih kurang untuk posisi itu, dan 3 langkah paling penting agar CV ini lolos untuk posisi itu. Langsung dan jujur, berdasarkan fakta di CV dan isi lowongan saja, jangan menambah klaim baru.',
+    '- Bila tidak ada deskripsi lowongan/posisi target, saranUntukLowongan berisi saran posisi: jenis pekerjaan apa yang paling cocok dengan CV ini dan 3 langkah paling penting agar CV ini siap dilamar.',
+    '- Bahasa hasil: ringkasan, kekurangan, alasan, dan saranUntukLowongan SELALU dalam Bahasa Indonesia yang jelas dan suportif.',
     '- saranPenulisanUlang: field asli salin apa adanya dari CV; field saran tulis ulang DALAM BAHASA ASLI CV (Inggris bila CV Inggris, Indonesia bila CV Indonesia) agar bisa langsung ditempel kembali ke CV; field alasan dalam Bahasa Indonesia.',
     rolePart,
     jobPart,
@@ -173,7 +174,7 @@ function normalizeResult(raw: unknown): AiResult | null {
   const obj = raw as Record<string, unknown>
   // Objek JSON yang sama sekali tidak memuat field skema dianggap bukan
   // jawaban analisis (mis. JSON lain yang kebetulan valid) → gagal parse.
-  const hasKnownField = ['ringkasan', 'saranPenulisanUlang', 'kekurangan', 'saranRingkasan'].some(
+  const hasKnownField = ['ringkasan', 'saranPenulisanUlang', 'kekurangan', 'saranUntukLowongan'].some(
     (key) => obj[key] !== undefined && obj[key] !== null,
   )
   if (!hasKnownField) return null
@@ -195,7 +196,7 @@ function normalizeResult(raw: unknown): AiResult | null {
     ringkasan: asString(obj.ringkasan),
     saranPenulisanUlang: rewrites,
     kekurangan: asStringList(obj.kekurangan, 6),
-    saranRingkasan: asString(obj.saranRingkasan),
+    saranUntukLowongan: asString(obj.saranUntukLowongan),
   }
 }
 

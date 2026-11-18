@@ -11,7 +11,7 @@ export interface AiAnalysis {
   ringkasan: string
   saranPenulisanUlang: AiRewrite[]
   kekurangan: string[]
-  saranRingkasan: string
+  saranUntukLowongan: string
 }
 
 export interface AiRequestInput {

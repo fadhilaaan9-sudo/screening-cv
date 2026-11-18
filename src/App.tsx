@@ -741,10 +741,10 @@ export default function App() {
                       </div>
                     )}
 
-                    {aiResult.saranRingkasan && (
+                    {aiResult.saranUntukLowongan && (
                       <div className="ai-block">
-                        <h4>Contoh Ringkasan Profil</h4>
-                        <p className="ai-summary">{aiResult.saranRingkasan}</p>
+                        <h4>Saran HRD untuk Lowongan Ini</h4>
+                        <p className="ai-summary">{aiResult.saranUntukLowongan}</p>
                       </div>
                     )}
                   </div>

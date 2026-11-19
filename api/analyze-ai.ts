@@ -111,8 +111,8 @@ function buildPrompt(cvText: string, targetRole: string, jobDesc: string): strin
     '{',
     '  "ringkasan": "penilaian kualitatif CV dalam 2-3 kalimat",',
     '  "saranPenulisanUlang": [ { "asli": "kalimat/poin asli dari CV", "saran": "versi penulisan ulang", "alasan": "kenapa versi baru lebih baik" } ],',
-    '  "kekurangan": [ "kekurangan CV, maksimal 6 butir" ],',
-    '  "saranUntukLowongan": "saran konsultan karier/HRD untuk lowongan yang dilamar, 3-5 kalimat"',
+    '  "kekurangan": [ "kekurangan CV, maksimal 4 butir terpenting, tiap butir maksimal 15 kata" ],',
+    '  "saranUntukLowongan": "saran konsultan karier/HRD untuk lowongan yang dilamar: 3 langkah, tiap langkah 1 kalimat pendek"',
     '}',
     '',
     'Patokan CV yang bagus (rubrik — nilai CV berdasarkan ini, bukan selera umum):',
@@ -128,13 +128,13 @@ function buildPrompt(cvText: string, targetRole: string, jobDesc: string): strin
     'R10 Kejujuran & relevansi: tidak ada klaim, peran, atau angka yang tidak ada di pengalaman asli; isi disesuaikan dengan posisi yang dilamar.',
     '',
     'Aturan ketat:',
-    '- saranPenulisanUlang: ambil maksimal 5 poin dari bagian pengalaman CV. Tulis ulang dengan kata kerja aksi yang kuat dan struktur pencapaian.',
+    '- saranPenulisanUlang: ambil maksimal 5 poin dari bagian pengalaman CV. Tulis ulang dengan kata kerja aksi yang kuat dan struktur pencapaian. Field alasan maksimal 1 kalimat pendek (sekitar 20 kata).',
     '- JANGAN mengarang pengalaman, perusahaan, atau angka baru. Bila angka pencapaian tidak ada di CV, pakai placeholder seperti [X%], [jumlah], atau [angka] di dalam saran, dan jelaskan di alasan bahwa pengguna harus mengisi angka aslinya sendiri.',
     jobDesc
       ? '- kekurangan: nilai kesenjangan (gap) CV terhadap deskripsi lowongan secara MAKNA — skill/pengalaman yang dituntut lowongan tapi belum tampak di CV, bukan sekadar daftar kata kunci yang hilang.'
       : '- kekurangan: nilai kekurangan umum CV (struktur, kejelasan, bukti pencapaian, kelengkapan bagian).',
-    '- kekurangan: tiap butir diawali kode rubrik yang dilanggar, mis. [R5] atau [R7], supaya pengguna tahu patokannya.',
-    '- saranUntukLowongan: tulis dari sudut pandang HRD/konsultan karier yang membaca CV ini untuk lowongan tersebut: apa yang dicari lowongan itu, pengalaman/skill mana dari CV yang paling cocok dan harus ditonjolkan, apa yang masih kurang untuk posisi itu, dan 3 langkah paling penting agar CV ini lolos untuk posisi itu. Langsung dan jujur, berdasarkan fakta di CV dan isi lowongan saja, jangan menambah klaim baru. Bila CV tidak cocok dengan posisi target — mis. tidak ada bukti sama sekali untuk posisi itu, atau posisi jauh di bawah level CV — katakan jujur di awal saran, jangan hanya memberi semangat.',
+    '- kekurangan: tiap butir diawali kode rubrik yang dilanggar, mis. [R5] atau [R7], supaya pengguna tahu patokannya. Maksimal 4 butir terpenting, tiap butir maksimal 15 kata.',
+    '- saranUntukLowongan: tulis dari sudut pandang HRD/konsultan karier yang membaca CV ini untuk lowongan tersebut: apa yang dicari lowongan itu, pengalaman/skill mana dari CV yang paling cocok dan harus ditonjolkan, apa yang masih kurang untuk posisi itu, dan 3 langkah paling penting agar CV ini lolos untuk posisi itu. Langsung dan jujur, berdasarkan fakta di CV dan isi lowongan saja, jangan menambah klaim baru. Bila CV tidak cocok dengan posisi target — mis. tidak ada bukti sama sekali untuk posisi itu, atau posisi jauh di bawah level CV — katakan jujur di awal saran, jangan hanya memberi semangat. Tulis dalam 3 langkah, tiap langkah 1 kalimat pendek (sekitar 20 kata); contoh angka harus berupa placeholder [X%]/[jumlah], bukan angka karangan.',
     '- Bila tidak ada deskripsi lowongan/posisi target, saranUntukLowongan berisi saran posisi: jenis pekerjaan apa yang paling cocok dengan CV ini dan 3 langkah paling penting agar CV ini siap dilamar.',
     '- Bahasa hasil: ringkasan, kekurangan, alasan, dan saranUntukLowongan SELALU dalam Bahasa Indonesia yang jelas dan suportif.',
     '- saranPenulisanUlang: field asli salin apa adanya dari CV; field saran tulis ulang DALAM BAHASA ASLI CV (Inggris bila CV Inggris, Indonesia bila CV Indonesia) agar bisa langsung ditempel kembali ke CV; field alasan dalam Bahasa Indonesia.',
@@ -208,7 +208,7 @@ function normalizeResult(raw: unknown): AiResult | null {
   return {
     ringkasan: asString(obj.ringkasan),
     saranPenulisanUlang: rewrites,
-    kekurangan: asStringList(obj.kekurangan, 6),
+    kekurangan: asStringList(obj.kekurangan, 4),
     saranUntukLowongan: asString(obj.saranUntukLowongan),
   }
 }

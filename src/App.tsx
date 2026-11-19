@@ -105,6 +105,8 @@ export default function App() {
   const [aiConsent, setAiConsent] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiResult, setAiResult] = useState<AiAnalysis | null>(null)
+  const [aiShowAllKekurangan, setAiShowAllKekurangan] = useState(false)
+  const [aiShowAllRewrites, setAiShowAllRewrites] = useState(false)
   const [aiError, setAiError] = useState('')
   const [aiThinking, setAiThinking] = useState('')
   const [aiThinkingOpen, setAiThinkingOpen] = useState(false)
@@ -214,6 +216,8 @@ export default function App() {
         },
       })
       setAiResult(data)
+      setAiShowAllKekurangan(false)
+      setAiShowAllRewrites(false)
     } catch (streamErr) {
       if (!receivedEvent) {
         // Streaming gagal sebelum event pertama (jaringan/HTTP error):
@@ -221,6 +225,8 @@ export default function App() {
         try {
           const data = await requestAiAnalysis(input)
           setAiResult(data)
+          setAiShowAllKekurangan(false)
+          setAiShowAllRewrites(false)
         } catch (fallbackErr) {
           setAiError(
             fallbackErr instanceof Error ? fallbackErr.message : 'Analisis AI gagal. Coba lagi nanti.',
@@ -715,7 +721,7 @@ export default function App() {
                       <div className="ai-block">
                         <h4>Saran Penulisan Ulang</h4>
                         <ul className="rewrite-list">
-                          {aiResult.saranPenulisanUlang.map((r, i) => (
+                          {(aiShowAllRewrites ? aiResult.saranPenulisanUlang : aiResult.saranPenulisanUlang.slice(0, 2)).map((r, i) => (
                             <li className="rewrite-item" key={i}>
                               <span className="rewrite-label">Asli</span>
                               <p className="rewrite-asli">{r.asli}</p>
@@ -725,6 +731,11 @@ export default function App() {
                             </li>
                           ))}
                         </ul>
+                        {aiResult.saranPenulisanUlang.length > 2 && (
+                          <button type="button" className="ai-toggle" onClick={() => setAiShowAllRewrites((v) => !v)}>
+                            {aiShowAllRewrites ? 'Sembunyikan' : `Tampilkan ${aiResult.saranPenulisanUlang.length - 2} saran lainnya`}
+                          </button>
+                        )}
                         <p className="ai-note">
                           Saran di atas adalah contoh — sesuaikan angka dan fakta dengan
                           pengalaman aslimu. Jangan memakai angka yang tidak benar.
@@ -736,8 +747,13 @@ export default function App() {
                       <div className="ai-block">
                         <h4>Kekurangan Menurut AI</h4>
                         <ul className="ai-list">
-                          {aiResult.kekurangan.map((k, i) => <li key={i}>{k}</li>)}
+                          {(aiShowAllKekurangan ? aiResult.kekurangan : aiResult.kekurangan.slice(0, 3)).map((k, i) => <li key={i}>{k}</li>)}
                         </ul>
+                        {aiResult.kekurangan.length > 3 && (
+                          <button type="button" className="ai-toggle" onClick={() => setAiShowAllKekurangan((v) => !v)}>
+                            {aiShowAllKekurangan ? 'Sembunyikan' : `Tampilkan ${aiResult.kekurangan.length - 3} kekurangan lainnya`}
+                          </button>
+                        )}
                       </div>
                     )}
 

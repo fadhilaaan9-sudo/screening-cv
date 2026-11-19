@@ -41,7 +41,6 @@ Catatan: `npm run dev` hanya menjalankan website (skor standar tetap jalan), tap
   hanya klaim / belum ada), tombol salin laporan, tombol reset, dan tombol
   "Coba CV Contoh".
 - Penghitung karakter/kata langsung pada textarea CV.
-- **Live Score Playground** — setelah analisis, buka Playground untuk mengedit poin pengalaman terlemah langsung di aplikasi; skor dihitung ulang seketika (debounce) dan ditampilkan sebagai delta dari skor awal, lengkap dengan misi per bukti (STAR lama → baru), petunjuk perbaikan, dan tombol "Terapkan ke CV".
 - **Analisis AI (OpenRouter)** — opsional, atas persetujuan pengguna: saran
   penulisan ulang, kekurangan kualitatif, dan saran HRD untuk lowongan yang
   dilamar dari backend `api/analyze-ai.ts` (lihat bagian Backend AI). Hanya
@@ -54,7 +53,7 @@ Catatan: `npm run dev` hanya menjalankan website (skor standar tetap jalan), tap
 api/
   analyze-ai.ts      Backend Analisis AI (Vercel Serverless Function → OpenRouter)
 src/
-  App.tsx            Komponen utama (hero, cara kerja, form, hasil, Playground, transparansi, tips)
+  App.tsx            Komponen utama (hero, cara kerja, form, hasil, transparansi, tips)
   App.css            Seluruh gaya aplikasi
   index.css          Gaya dasar (reset & font)
   lib/

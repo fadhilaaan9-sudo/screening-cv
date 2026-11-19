@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
-import { analyzeCv, countWords, type AnalysisResult, type CandidateMode, type CheckItem, type Evidence } from './lib/analyze'
+import { analyzeCv, countWords, type AnalysisResult, type CandidateMode, type CheckItem } from './lib/analyze'
 import { buildRuleContext, requestAiAnalysis, requestAiAnalysisStreaming, type AiAnalysis } from './lib/ai'
 import { SAMPLE_CV } from './lib/sampleCv'
 import { extractTextFromFile } from './lib/readFile'
@@ -82,175 +82,6 @@ function CheckRow({ check }: { check: CheckItem }) {
   )
 }
 
-// ---------- Live Score Playground ----------
-// Pengguna mengedit bullet bukti terlemah langsung di aplikasi. Tiap edit
-// membangun ulang teks CV dan menjalankan analyzeCv lagi (debounce), jadi
-// skor berubah langsung. Quest = 3 bukti terlemah dari hasil dasar.
-
-const BULLET_MARKER_RE = /^(\s*(?:[-•*]|\d+[.)])\s+)/
-
-function cleanBulletLine(line: string): string {
-  return line.replace(BULLET_MARKER_RE, '').trim()
-}
-
-interface PgBulletEdit {
-  original: string
-  current: string
-}
-
-/** Terapkan semua edit bullet ke teks CV dasar, satu baris per edit. */
-function rebuildCvText(baseText: string, edits: PgBulletEdit[]): string {
-  if (edits.length === 0) return baseText
-  const lines = baseText.split('\n')
-  const used = new Set<number>()
-  for (const edit of edits) {
-    if (edit.current === edit.original) continue
-    for (let i = 0; i < lines.length; i++) {
-      if (used.has(i)) continue
-      const line = lines[i]
-      if (cleanBulletLine(line) === edit.original || line.trim() === edit.original) {
-        const marker = line.match(BULLET_MARKER_RE)?.[1] ?? ''
-        lines[i] = marker ? `${marker}${edit.current}` : edit.current
-        used.add(i)
-        break
-      }
-    }
-  }
-  return lines.join('\n')
-}
-
-/** Petunjuk perbaikan berdasarkan alasan STAR yang kurang pada bukti itu. */
-function hintsForReasons(reasons: string[]): string[] {
-  const hints: string[] = []
-  if (reasons.some((r) => r.includes('hasil terukur'))) {
-    hints.push('Tambahkan angka: persen, jumlah orang/proyek, atau nominal Rp.')
-  }
-  if (reasons.some((r) => r.includes('kata kerja'))) {
-    hints.push('Pakai kata kerja aksi: meningkatkan, membangun, mengelola, mengotomatisasi.')
-  }
-  if (reasons.some((r) => r.includes('periode'))) {
-    hints.push('Tambahkan periode (tahun mulai–selesai) di judul pengalaman ini.')
-  }
-  if (reasons.some((r) => r.includes('peran'))) {
-    hints.push('Perjelas peran dan tempat di judul: "Peran — Tempat (Tahun)".')
-  }
-  return hints
-}
-
-function PlaygroundPanel(props: {
-  base: AnalysisResult
-  live: AnalysisResult | null
-  quests: Evidence[]
-  edits: Record<string, string>
-  hasEdits: boolean
-  onBulletChange: (bulletId: string, value: string) => void
-  onResetBullet: (bulletId: string) => void
-  onApply: () => void
-  onReset: () => void
-  onClose: () => void
-}) {
-  const { base, live, quests } = props
-  const liveScore = live?.readyScore ?? base.readyScore
-  const delta = liveScore - base.readyScore
-  const changedAspects = base.aspects
-    .map((a) => {
-      const now = live?.aspects.find((x) => x.name === a.name)
-      return now && now.score !== a.score
-        ? { name: a.name, from: a.score, to: now.score, max: a.max }
-        : null
-    })
-    .filter((x): x is { name: string; from: number; to: number; max: number } => x !== null)
-
-  return (
-    <div className="card pg-panel">
-      <div className="pg-head">
-        <div>
-          <h3><Icon d={I.zap} size={18} /> Playground — Naikkan Skormu</h3>
-          <p>
-            Edit poin pengalaman di bawah, skor berubah langsung. Tidak ada yang
-            tersimpan sampai kamu menekan "Terapkan ke CV".
-          </p>
-        </div>
-        <div className="pg-score">
-          <ScoreRing score={liveScore} size={120} />
-          <span className={`pg-delta${delta > 0 ? ' pg-delta-up' : delta < 0 ? ' pg-delta-down' : ''}`}>
-            {delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : '±0'} poin dari {base.readyScore}
-          </span>
-        </div>
-      </div>
-
-      {changedAspects.length > 0 && (
-        <ul className="pg-aspects">
-          {changedAspects.map((a) => (
-            <li key={a.name}>
-              {a.name}: {a.from}/{a.max} → <strong>{a.to}/{a.max}</strong>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {quests.length === 0 ? (
-        <p>
-          Belum ada bukti yang bisa dilatih. Tambahkan pengalaman, magang, atau
-          proyek dengan poin-poin bullet, lalu analisis ulang.
-        </p>
-      ) : (
-        <div className="pg-quests">
-          {quests.map((evidence, qi) => {
-            const liveEvidence = live?.allEvidence.find((e) => e.title === evidence.title) ?? null
-            return (
-              <div className="pg-quest" key={`${evidence.title}-${qi}`}>
-                <div className="pg-quest-head">
-                  <strong>Misi {qi + 1}: {evidence.title}</strong>
-                  <span className="check-meta">
-                    STAR {evidence.score}/10{liveEvidence ? ` → ${liveEvidence.score}/10` : ''}
-                  </span>
-                </div>
-                {evidence.reasons.length > 0 && (
-                  <p className="pg-reasons">Yang kurang: {evidence.reasons.join('; ')}.</p>
-                )}
-                {hintsForReasons(evidence.reasons).map((h) => (
-                  <p className="pg-hint" key={h}>{h}</p>
-                ))}
-                {evidence.bullets.map((bullet, bi) => {
-                  const bulletId = `${qi}:${bi}`
-                  const value = props.edits[bulletId] ?? bullet
-                  return (
-                    <div className="pg-bullet" key={bulletId}>
-                      <textarea
-                        value={value}
-                        rows={2}
-                        onChange={(e) => props.onBulletChange(bulletId, e.target.value)}
-                      />
-                      {value !== bullet && (
-                        <button className="pg-reset-bullet" type="button" onClick={() => props.onResetBullet(bulletId)}>
-                          Kembalikan ke teks asli
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      <div className="form-actions pg-actions">
-        <button className="btn btn-primary" type="button" onClick={props.onApply} disabled={!props.hasEdits}>
-          <Icon d={I.check} size={18} /> Terapkan ke CV
-        </button>
-        <button className="btn btn-secondary" type="button" onClick={props.onReset} disabled={!props.hasEdits}>
-          Mulai Ulang
-        </button>
-        <button className="btn btn-plain" type="button" onClick={props.onClose}>
-          Tutup Playground
-        </button>
-      </div>
-    </div>
-  )
-}
-
 const ATS_TIPS = [
   'Gunakan heading standar yang mudah dikenali sistem ATS: Ringkasan, Pengalaman, Magang, Proyek, Pendidikan, Keahlian.',
   'Tulis pencapaian dengan angka: persen, jumlah orang/proyek, atau nominal — bukan hanya daftar tugas.',
@@ -281,14 +112,8 @@ export default function App() {
   const [aiThinkingOpen, setAiThinkingOpen] = useState(false)
   const [aiElapsed, setAiElapsed] = useState(0)
   const [aiDuration, setAiDuration] = useState<number | null>(null)
-  const [pgOpen, setPgOpen] = useState(false)
-  const [pgBase, setPgBase] = useState<AnalysisResult | null>(null)
-  const [pgText, setPgText] = useState('')
-  const [pgEdits, setPgEdits] = useState<Record<string, string>>({})
-  const [pgResult, setPgResult] = useState<AnalysisResult | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const resultRef = useRef<HTMLDivElement>(null)
-  const pgRef = useRef<HTMLDivElement>(null)
   const aiStartRef = useRef(0)
   const thinkingBodyRef = useRef<HTMLDivElement>(null)
 
@@ -301,19 +126,6 @@ export default function App() {
     return () => window.clearInterval(id)
   }, [aiLoading])
 
-  // Playground: nilai ulang teks kerja (debounce) tiap kali pengguna mengedit bullet.
-  useEffect(() => {
-    if (!pgOpen || !pgBase) return
-    if (pgText === cvText) {
-      setPgResult(pgBase)
-      return
-    }
-    const id = window.setTimeout(() => {
-      setPgResult(analyzeCv(pgText, { targetRole, jobDesc, mode }))
-    }, 300)
-    return () => window.clearTimeout(id)
-  }, [pgText, pgOpen, pgBase, cvText, targetRole, jobDesc, mode])
-
   // Panel proses berpikir selalu bergulir mengikuti teks terbaru.
   useEffect(() => {
     const el = thinkingBodyRef.current
@@ -322,10 +134,6 @@ export default function App() {
 
   async function handleFile(file: File) {
     setError('')
-    setPgOpen(false)
-    setPgBase(null)
-    setPgResult(null)
-    setPgEdits({})
     setLoadingFile(true)
     try {
       const text = await extractTextFromFile(file)
@@ -344,10 +152,6 @@ export default function App() {
 
   function handleAnalyze() {
     setError('')
-    setPgOpen(false)
-    setPgBase(null)
-    setPgResult(null)
-    setPgEdits({})
     if (cvText.trim().length < 20) {
       setError('Teks CV masih terlalu pendek. Upload file CV atau tempel teks CV terlebih dahulu.')
       return
@@ -363,10 +167,6 @@ export default function App() {
     setMode('experienced')
     setFileName('')
     setError('')
-    setPgOpen(false)
-    setPgBase(null)
-    setPgResult(null)
-    setPgEdits({})
   }
 
   function handleReset() {
@@ -385,79 +185,6 @@ export default function App() {
     setAiThinkingOpen(false)
     setAiElapsed(0)
     setAiDuration(null)
-    setPgOpen(false)
-    setPgBase(null)
-    setPgResult(null)
-    setPgEdits({})
-  }
-
-  // ---------- Live Score Playground: handler ----------
-
-  const pgQuests = useMemo(() => {
-    if (!pgBase) return []
-    return [...pgBase.allEvidence]
-      .filter((e) => e.bullets.length > 0)
-      .sort((a, b) => a.score - b.score)
-      .slice(0, 3)
-  }, [pgBase])
-
-  /** Bangun ulang teks kerja dari CV dasar + semua edit bullet. */
-  function rebuildFromEdits(edits: Record<string, string>): string {
-    const list: PgBulletEdit[] = []
-    pgQuests.forEach((q, qi) => {
-      q.bullets.forEach((bullet, bi) => {
-        const current = edits[`${qi}:${bi}`]
-        if (current !== undefined && current !== bullet) {
-          list.push({ original: bullet, current })
-        }
-      })
-    })
-    return rebuildCvText(cvText, list)
-  }
-
-  function openPlayground() {
-    if (!result) return
-    setPgBase(result)
-    setPgEdits({})
-    setPgText(cvText)
-    setPgResult(result)
-    setPgOpen(true)
-    requestAnimationFrame(() => {
-      pgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
-  }
-
-  function handlePgBulletChange(bulletId: string, value: string) {
-    const next = { ...pgEdits, [bulletId]: value }
-    setPgEdits(next)
-    setPgText(rebuildFromEdits(next))
-  }
-
-  function handlePgResetBullet(bulletId: string) {
-    const next = { ...pgEdits }
-    delete next[bulletId]
-    setPgEdits(next)
-    setPgText(rebuildFromEdits(next))
-  }
-
-  function resetPlayground() {
-    if (!pgBase) return
-    setPgEdits({})
-    setPgText(cvText)
-    setPgResult(pgBase)
-  }
-
-  function applyPlayground() {
-    const live = pgResult ?? analyzeCv(pgText, { targetRole, jobDesc, mode })
-    setCvText(pgText)
-    setResult(live)
-    setPgOpen(false)
-    setPgBase(null)
-    setPgResult(null)
-    setPgEdits({})
-    requestAnimationFrame(() => {
-      resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
   }
 
   async function handleAiAnalyze() {
@@ -614,8 +341,8 @@ export default function App() {
         <div className="step-card">
           <span className="step-num">3</span>
           <Icon d={I.list} size={22} />
-          <h3>Lihat dua skor & latih di Playground</h3>
-          <p>Skor Siap dan Skor Cocok, bukti STAR terbaikmu, dan prioritas perbaikan yang terurut — lalu edit langsung di Playground dan lihat skormu naik.</p>
+          <h3>Lihat dua skor & perbaiki</h3>
+          <p>Skor Siap dan Skor Cocok, bukti STAR terbaikmu, dan prioritas perbaikan yang terurut.</p>
         </div>
       </section>
 
@@ -787,9 +514,6 @@ export default function App() {
                     <button className="btn btn-secondary" type="button" onClick={handleCopyReport}>
                       <Icon d={I.copy} size={16} /> {copied ? 'Laporan tersalin!' : 'Salin Laporan'}
                     </button>
-                    <button className="btn btn-primary" type="button" onClick={openPlayground}>
-                      <Icon d={I.zap} size={16} /> Buka Playground
-                    </button>
                   </div>
                 </div>
 
@@ -874,23 +598,6 @@ export default function App() {
                   </ul>
                 )}
               </div>
-
-              {pgOpen && pgBase && (
-                <div ref={pgRef}>
-                  <PlaygroundPanel
-                    base={pgBase}
-                    live={pgResult}
-                    quests={pgQuests}
-                    edits={pgEdits}
-                    hasEdits={pgText !== cvText}
-                    onBulletChange={handlePgBulletChange}
-                    onResetBullet={handlePgResetBullet}
-                    onApply={applyPlayground}
-                    onReset={resetPlayground}
-                    onClose={() => setPgOpen(false)}
-                  />
-                </div>
-              )}
 
               {result.keywords && (
                 <div className="card">

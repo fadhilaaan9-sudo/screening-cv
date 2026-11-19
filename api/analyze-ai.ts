@@ -86,7 +86,7 @@ function clientIp(req: AiRequest): string {
 }
 
 const SYSTEM_PROMPT =
-  'Kamu adalah konsultan karier berbahasa Indonesia. CV yang kamu baca bisa berbahasa Indonesia atau Inggris — pahami dalam bahasa aslinya, jangan terjemahkan nama, perusahaan, atau angka. Balas HANYA dengan JSON valid sesuai skema yang diminta — tanpa markdown, tanpa pagar kode, tanpa teks pembuka/penutup. Semua penjelasanmu dalam Bahasa Indonesia; hanya isi field saran (versi tulis ulang) yang memakai bahasa asli CV agar bisa langsung ditempel kembali. Jangan mengarang pengalaman, perusahaan, atau angka yang tidak ada di CV.'
+  'Kamu adalah konsultan karier berbahasa Indonesia. CV yang kamu baca bisa berbahasa Indonesia atau Inggris — pahami dalam bahasa aslinya, jangan terjemahkan nama, perusahaan, atau angka. Balas HANYA dengan JSON valid sesuai skema yang diminta — tanpa markdown, tanpa pagar kode, tanpa teks pembuka/penutup. Semua penjelasanmu dalam Bahasa Indonesia; hanya isi field saran (versi tulis ulang) yang memakai bahasa asli CV agar bisa langsung ditempel kembali. Jangan mengarang pengalaman, perusahaan, atau angka yang tidak ada di CV. Kamu adalah penasihat, bukan penilai: jangan memberi skor dan jangan bertentangan dengan hasil penilaian rule-based yang disertakan di prompt.'
 
 // Bahasa CV ditebak dari kata penanda — sama seperti di src/lib/analyze.ts.
 // Dipakai hanya untuk aturan bahasa prompt, bukan untuk skor.
@@ -97,7 +97,7 @@ function detectAiCvLanguage(cvText: string): 'id' | 'en' {
   return enCount > idCount ? 'en' : 'id'
 }
 
-function buildPrompt(cvText: string, targetRole: string, jobDesc: string): string {
+export function buildPrompt(cvText: string, targetRole: string, jobDesc: string, rule: RuleContext | null = null): string {
   const rolePart = targetRole
     ? `\nPOSISI YANG DILAMAR: ${targetRole}\n`
     : ''
@@ -140,9 +140,103 @@ function buildPrompt(cvText: string, targetRole: string, jobDesc: string): strin
     '- saranPenulisanUlang: field asli salin apa adanya dari CV; field saran tulis ulang DALAM BAHASA ASLI CV (Inggris bila CV Inggris, Indonesia bila CV Indonesia) agar bisa langsung ditempel kembali ke CV; field alasan dalam Bahasa Indonesia.',
     rolePart,
     jobPart,
+    ...(rule ? [formatRulePart(rule), ''] : []),
     'TEKS CV:',
     cvText,
   ].join('\n')
+}
+
+export interface RuleContext {
+  readyScore: number
+  readyLabel: string
+  mode: string
+  aspects: { name: string; score: number; max: number }[]
+  weakestEvidence: { title: string; score: number; reasons: string[] }[]
+  priorities: string[]
+}
+
+// Konteks hasil rule-based dari frontend — dipakai hanya untuk melengkapi
+// prompt, tidak pernah untuk mengubah skor (skor tetap dihitung di browser).
+// Parsing defensif: field yang tidak sesuai bentuknya dilewati; bila skor
+// tidak ada, konteks diabaikan seluruhnya (prompt jalan tanpa konteks).
+export function parseRuleContext(value: unknown): RuleContext | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const obj = value as Record<string, unknown>
+  const readyScore = typeof obj.readyScore === 'number' ? obj.readyScore : NaN
+  if (!Number.isFinite(readyScore)) return null
+  const aspects = Array.isArray(obj.aspects)
+    ? obj.aspects
+        .map((a) => {
+          if (!a || typeof a !== 'object') return null
+          const it = a as Record<string, unknown>
+          return typeof it.name === 'string' &&
+            typeof it.score === 'number' &&
+            typeof it.max === 'number'
+            ? { name: it.name, score: it.score, max: it.max }
+            : null
+        })
+        .filter((a): a is { name: string; score: number; max: number } => a !== null)
+    : []
+  const weakestEvidence = Array.isArray(obj.weakestEvidence)
+    ? obj.weakestEvidence
+        .map((e) => {
+          if (!e || typeof e !== 'object') return null
+          const it = e as Record<string, unknown>
+          return typeof it.title === 'string' && typeof it.score === 'number'
+            ? { title: it.title, score: it.score, reasons: asStringList(it.reasons, 4) }
+            : null
+        })
+        .filter((e): e is { title: string; score: number; reasons: string[] } => e !== null)
+    : []
+  return {
+    readyScore,
+    readyLabel: asString(obj.readyLabel),
+    mode: asString(obj.mode),
+    aspects,
+    weakestEvidence,
+    priorities: asStringList(obj.priorities, 5),
+  }
+}
+
+function formatRulePart(rule: RuleContext): string {
+  let scoreLine = `Skor Siap: ${rule.readyScore}/100`
+  if (rule.readyLabel) scoreLine += ` (${rule.readyLabel})`
+  if (rule.mode) scoreLine += ` • Mode: ${rule.mode}`
+  const lines: string[] = [
+    'HASIL PENILAIAN RULE-BASED (dihitung deterministik di browser — ini patokan resminya, bukan tebakanmu):',
+    scoreLine,
+  ]
+  if (rule.aspects.length > 0) {
+    lines.push(`Per aspek: ${rule.aspects.map((a) => `${a.name} ${a.score}/${a.max}`).join('; ')}.`)
+  }
+  if (rule.weakestEvidence.length > 0) {
+    lines.push('Bukti terlemah (fokuskan saran penulisan ulang pada ini):')
+    for (const e of rule.weakestEvidence) {
+      const kurang = e.reasons.length > 0 ? `; kurang: ${e.reasons.join('; ')}` : ''
+      lines.push(`- "${e.title}" (STAR ${e.score}/10${kurang})`)
+    }
+  }
+  if (rule.priorities.length > 0) {
+    lines.push(`Prioritas perbaikan: ${rule.priorities.join(' | ')}`)
+  }
+  lines.push(
+    'Peranmu: kamu PENASIHAT, bukan penilai. JANGAN memberi skor baru, JANGAN menilai ulang, dan JANGAN bertentangan dengan hasil di atas. Kalau ringkasanmu terasa bertentangan dengan skor di atas, sesuaikan ringkasanmu dengan skor itu.',
+  )
+  return lines.join('\n')
+}
+
+// Model cadangan bila model utama gagal dengan error yang bisa dipulihkan
+// (verifikasi 2026-11-19: masih terdaftar gratis di OpenRouter).
+// Bisa diganti tanpa mengubah kode lewat OPENROUTER_FALLBACK_MODEL.
+const FALLBACK_MODEL = 'google/gemma-4-31b-it:free'
+
+// Error yang layak mencoba model cadangan: model dihapus (404), kuota
+// gratis habis (429), atau error server (5xx) — termasuk timeout dan
+// gangguan jaringan. TIDAK dipakai untuk 400 (parameter ditolak —
+// ditangani loop pengulangan), 401/403 (API key ditolak), dan 402
+// (kredit habis) karena itu masalah akun, bukan model.
+export function isFallbackableStatus(status: number): boolean {
+  return status === 404 || status === 429 || status >= 500
 }
 
 function asString(value: unknown): string {
@@ -379,10 +473,11 @@ class ThinkSplitter {
 
 interface StreamOptions {
   apiKey: string
-  model: string
+  models: string[]
   cvText: string
   targetRole: string
   jobDesc: string
+  rule: RuleContext | null
 }
 
 // Menjalankan analisis dalam mode streaming: meneruskan penalaran model
@@ -392,11 +487,10 @@ interface StreamOptions {
 // fungsi ini hanya dipanggil setelah validasi lolos dan aliran adalah
 // satu-satunya keluaran yang tersisa untuk kegagalan di tengah proses.
 async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<void> {
-  const { apiKey, model, cvText, targetRole, jobDesc } = opts
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS)
+  const { apiKey, models, cvText, targetRole, jobDesc, rule } = opts
+  const prompt = buildPrompt(cvText, targetRole, jobDesc, rule)
 
-  const sendRequest = async (options: {
+  const sendRequest = async (model: string, signal: AbortSignal, options: {
     withResponseFormat: boolean
     withReasoning: boolean
   }): Promise<Response> => {
@@ -408,12 +502,12 @@ async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<voi
           Authorization: `Bearer ${apiKey}`,
           'X-Title': 'Screening CV',
         },
-        signal: controller.signal,
+        signal,
         body: JSON.stringify({
           model,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: buildPrompt(cvText, targetRole, jobDesc) },
+            { role: 'user', content: prompt },
           ],
           stream: true,
           ...(options.withResponseFormat ? { response_format: { type: 'json_object' } } : {}),
@@ -425,7 +519,7 @@ async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<voi
         }),
       })
     } catch (err) {
-      if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+      if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
         throw new UpstreamTimeoutError()
       }
       throw err
@@ -444,48 +538,76 @@ async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<voi
   }
 
   // --- Fase fetch: aliran belum dimulai, error dibalas JSON biasa ---
-  let aiResponse: Response
-  let upstreamMessage: string | null = null
-  let includeResponseFormat = true
-  let includeReasoning = true
-  try {
-    aiResponse = await sendRequest({
-      withResponseFormat: includeResponseFormat,
-      withReasoning: includeReasoning,
-    })
-    // Penolakan parameter opsional (400) ditangani sama seperti mode biasa:
-    // buang parameter yang ditolak, ulangi maksimal 2 kali.
-    for (let retry = 0; retry < 2 && !aiResponse.ok && aiResponse.status === 400; retry++) {
-      const message400 = await readErrMessage(aiResponse)
-      const lower = message400.toLowerCase()
-      let dropped = false
-      if (includeReasoning && lower.includes('reasoning')) {
-        includeReasoning = false
-        dropped = true
-      } else if (includeResponseFormat && /response_format|\bjson\b/.test(lower)) {
-        includeResponseFormat = false
-        dropped = true
-      } else if (/unsupported|not supported|unknown|invalid parameter/.test(lower)) {
-        if (includeReasoning) {
-          includeReasoning = false
-          dropped = true
-        } else if (includeResponseFormat) {
-          includeResponseFormat = false
-          dropped = true
-        }
-      }
-      if (!dropped) {
-        upstreamMessage = message400
-        break
-      }
-      aiResponse = await sendRequest({
+  // Coba model utama dulu, lalu model cadangan bila gagal dengan error
+  // yang bisa dipulihkan. Tiap model punya anggaran waktu sendiri.
+  let aiResponse: Response | null = null
+  let lastDetail = ''
+  let lastTimedOut = false
+  for (const candidate of models) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), STREAM_TIMEOUT_MS)
+    let upstreamMessage: string | null = null
+    let includeResponseFormat = true
+    let includeReasoning = true
+    try {
+      aiResponse = await sendRequest(candidate, controller.signal, {
         withResponseFormat: includeResponseFormat,
         withReasoning: includeReasoning,
       })
+      // Penolakan parameter opsional (400) ditangani sama seperti mode biasa:
+      // buang parameter yang ditolak, ulangi maksimal 2 kali.
+      for (let retry = 0; retry < 2 && !aiResponse.ok && aiResponse.status === 400; retry++) {
+        const message400 = await readErrMessage(aiResponse)
+        const lower = message400.toLowerCase()
+        let dropped = false
+        if (includeReasoning && lower.includes('reasoning')) {
+          includeReasoning = false
+          dropped = true
+        } else if (includeResponseFormat && /response_format|\bjson\b/.test(lower)) {
+          includeResponseFormat = false
+          dropped = true
+        } else if (/unsupported|not supported|unknown|invalid parameter/.test(lower)) {
+          if (includeReasoning) {
+            includeReasoning = false
+            dropped = true
+          } else if (includeResponseFormat) {
+            includeResponseFormat = false
+            dropped = true
+          }
+        }
+        if (!dropped) {
+          upstreamMessage = message400
+          break
+        }
+        aiResponse = await sendRequest(candidate, controller.signal, {
+          withResponseFormat: includeResponseFormat,
+          withReasoning: includeReasoning,
+        })
+      }
+      if (aiResponse.ok) break
+      const message = upstreamMessage ?? (await readErrMessage(aiResponse))
+      lastDetail = `OpenRouter HTTP ${aiResponse.status}${message ? `: ${message}` : ''} (model ${candidate})`
+      if (!isFallbackableStatus(aiResponse.status)) break
+      aiResponse = null
+    } catch (err) {
+      if (err instanceof UpstreamTimeoutError) {
+        lastTimedOut = true
+        lastDetail = `Timeout ${STREAM_TIMEOUT_MS / 1000} detik menunggu OpenRouter (model ${candidate})`
+        console.error(`[analyze-ai] (stream) ${lastDetail}`)
+      } else {
+        lastTimedOut = false
+        lastDetail = `Tidak bisa menghubungi OpenRouter (model ${candidate})`
+        console.error(`[analyze-ai] (stream) ${lastDetail}`)
+      }
+      aiResponse = null
+      continue
+    } finally {
+      clearTimeout(timer)
     }
-  } catch (err) {
-    clearTimeout(timer)
-    if (err instanceof UpstreamTimeoutError) {
+    lastTimedOut = false
+  }
+  if (!aiResponse) {
+    if (lastTimedOut) {
       console.error(`[analyze-ai] (stream) Timeout ${STREAM_TIMEOUT_MS / 1000} detik menunggu OpenRouter`)
       res.status(502).json({
         error: 'Layanan AI terlalu lama merespons. Coba lagi — hasil analisis standar tetap bisa dipakai.',
@@ -495,14 +617,13 @@ async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<voi
     }
     res.status(502).json({
       error: 'Layanan AI sedang tidak bisa dihubungi. Coba lagi nanti — hasil analisis standar tetap bisa dipakai.',
+      detail: lastDetail,
     })
     return
   }
 
   if (!aiResponse.ok) {
-    clearTimeout(timer)
-    const message = upstreamMessage ?? (await readErrMessage(aiResponse))
-    const detail = `OpenRouter HTTP ${aiResponse.status}${message ? `: ${message}` : ''}`
+    const detail = lastDetail
     console.error(`[analyze-ai] (stream) ${detail}`)
     if (aiResponse.status === 429) {
       res.status(429).json({
@@ -534,13 +655,20 @@ async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<voi
 
   const reader = aiResponse.body?.getReader()
   if (!reader) {
-    clearTimeout(timer)
     res.status(502).json({
       error: 'Layanan AI mengembalikan kesalahan. Coba lagi nanti — hasil analisis standar tetap bisa dipakai.',
       detail: 'OpenRouter tidak mengirim aliran data (stream kosong).',
     })
     return
   }
+
+  // Batas waktu fase aliran: bila model berhenti mengirim, hentikan
+  // pembacaan agar pengguna tidak menunggu tanpa batas.
+  let streamTimedOut = false
+  const streamTimer = setTimeout(() => {
+    streamTimedOut = true
+    void reader.cancel().catch(() => {})
+  }, STREAM_TIMEOUT_MS)
 
   // --- Fase aliran: keluaran menjadi NDJSON, satu event per baris ---
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
@@ -634,7 +762,7 @@ async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<voi
       }
     }
   } catch (err) {
-    if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+    if (streamTimedOut) {
       streamError = {
         error: 'Layanan AI terlalu lama merespons. Coba lagi — hasil analisis standar tetap bisa dipakai.',
         detail: 'Timeout 120 detik menunggu OpenRouter (streaming)',
@@ -646,7 +774,7 @@ async function streamAnalysis(res: AiResponse, opts: StreamOptions): Promise<voi
       }
     }
   } finally {
-    clearTimeout(timer)
+    clearTimeout(streamTimer)
   }
 
   // Sisa splitter (tag tidak ditutup / potongan terakhir) tetap diproses.
@@ -747,17 +875,21 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
     return
   }
   const model = process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free'
+  // Model cadangan (verifikasi 2026-11-19: masih terdaftar gratis di OpenRouter).
+  // Urutan coba: model utama dulu, lalu cadangan bila gagal dengan error yang bisa dipulihkan.
+  const models = [...new Set([model, process.env.OPENROUTER_FALLBACK_MODEL || FALLBACK_MODEL])]
+  const rule = parseRuleContext(payload.rule)
 
   // Mode streaming (body memuat "stream": true): proses berpikir model
   // diteruskan langsung ke browser sebagai event NDJSON. Semua validasi,
   // rate limit, dan pemeriksaan key di atas sudah berjalan sama seperti
   // mode biasa — error sebelum aliran dimulai dibalas JSON biasa.
   if (payload.stream === true) {
-    await streamAnalysis(res, { apiKey, model, cvText, targetRole, jobDesc })
+    await streamAnalysis(res, { apiKey, models, cvText, targetRole, jobDesc, rule })
     return
   }
 
-  const sendRequest = async (options: {
+  const sendRequest = async (model: string, options: {
     withResponseFormat: boolean
     withReasoning: boolean
   }): Promise<Response> => {
@@ -776,7 +908,7 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
           model,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: buildPrompt(cvText, targetRole, jobDesc) },
+            { role: 'user', content: buildPrompt(cvText, targetRole, jobDesc, rule) },
           ],
           ...(options.withResponseFormat ? { response_format: { type: 'json_object' } } : {}),
           // Model reasoning bisa menghabiskan seluruh jatah token hanya
@@ -813,52 +945,77 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
     }
   }
 
-  let aiResponse: Response
-  let upstreamMessage: string | null = null
-  let includeResponseFormat = true
-  let includeReasoning = true
-  try {
-    aiResponse = await sendRequest({
-      withResponseFormat: includeResponseFormat,
-      withReasoning: includeReasoning,
-    })
-    // Sebagian model menolak parameter opsional (reasoning / response_format).
-    // Bila error 400 menyebut parameter yang tidak didukung, buang parameter
-    // yang ditolak lalu ulangi — maksimal 2 kali pengulangan, satu jenis
-    // parameter dibuang tiap kali. Error 400 lain tidak diulang dan tetap
-    // dipetakan seperti biasa.
-    for (let retry = 0; retry < 2 && !aiResponse.ok && aiResponse.status === 400; retry++) {
-      const message400 = await readUpstreamMessage(aiResponse)
-      const lower = message400.toLowerCase()
-      let dropped = false
-      if (includeReasoning && lower.includes('reasoning')) {
-        includeReasoning = false
-        dropped = true
-      } else if (includeResponseFormat && /response_format|\bjson\b/.test(lower)) {
-        includeResponseFormat = false
-        dropped = true
-      } else if (/unsupported|not supported|unknown|invalid parameter/.test(lower)) {
-        // Parameter ditolak tanpa disebut namanya: buang reasoning dulu,
-        // lalu response_format pada pengulangan berikutnya.
-        if (includeReasoning) {
-          includeReasoning = false
-          dropped = true
-        } else if (includeResponseFormat) {
-          includeResponseFormat = false
-          dropped = true
-        }
-      }
-      if (!dropped) {
-        upstreamMessage = message400
-        break
-      }
-      aiResponse = await sendRequest({
+  // Coba model utama dulu, lalu model cadangan bila gagal dengan error
+  // yang bisa dipulihkan. Tiap model punya anggaran waktu sendiri
+  // (sendRequest membuat AbortController-nya sendiri per panggilan).
+  let aiResponse: Response | null = null
+  let lastDetail = ''
+  let lastTimedOut = false
+  for (const candidate of models) {
+    let upstreamMessage: string | null = null
+    let includeResponseFormat = true
+    let includeReasoning = true
+    try {
+      aiResponse = await sendRequest(candidate, {
         withResponseFormat: includeResponseFormat,
         withReasoning: includeReasoning,
       })
+      // Sebagian model menolak parameter opsional (reasoning / response_format).
+      // Bila error 400 menyebut parameter yang tidak didukung, buang parameter
+      // yang ditolak lalu ulangi — maksimal 2 kali pengulangan, satu jenis
+      // parameter dibuang tiap kali. Error 400 lain tidak diulang dan tetap
+      // dipetakan seperti biasa.
+      for (let retry = 0; retry < 2 && !aiResponse.ok && aiResponse.status === 400; retry++) {
+        const message400 = await readUpstreamMessage(aiResponse)
+        const lower = message400.toLowerCase()
+        let dropped = false
+        if (includeReasoning && lower.includes('reasoning')) {
+          includeReasoning = false
+          dropped = true
+        } else if (includeResponseFormat && /response_format|\bjson\b/.test(lower)) {
+          includeResponseFormat = false
+          dropped = true
+        } else if (/unsupported|not supported|unknown|invalid parameter/.test(lower)) {
+          // Parameter ditolak tanpa disebut namanya: buang reasoning dulu,
+          // lalu response_format pada pengulangan berikutnya.
+          if (includeReasoning) {
+            includeReasoning = false
+            dropped = true
+          } else if (includeResponseFormat) {
+            includeResponseFormat = false
+            dropped = true
+          }
+        }
+        if (!dropped) {
+          upstreamMessage = message400
+          break
+        }
+        aiResponse = await sendRequest(candidate, {
+          withResponseFormat: includeResponseFormat,
+          withReasoning: includeReasoning,
+        })
+      }
+      if (aiResponse.ok) break
+      const message = upstreamMessage ?? (await readUpstreamMessage(aiResponse))
+      lastDetail = `OpenRouter HTTP ${aiResponse.status}${message ? `: ${message}` : ''} (model ${candidate})`
+      if (!isFallbackableStatus(aiResponse.status)) break
+    } catch (err) {
+      if (err instanceof UpstreamTimeoutError) {
+        lastTimedOut = true
+        lastDetail = `Timeout ${UPSTREAM_TIMEOUT_MS / 1000} detik menunggu OpenRouter (model ${candidate})`
+        console.error(`[analyze-ai] ${lastDetail}`)
+      } else {
+        lastTimedOut = false
+        lastDetail = `Tidak bisa menghubungi OpenRouter (model ${candidate})`
+        console.error(`[analyze-ai] ${lastDetail}`)
+      }
+      aiResponse = null
+      continue
     }
-  } catch (err) {
-    if (err instanceof UpstreamTimeoutError) {
+    lastTimedOut = false
+  }
+  if (!aiResponse) {
+    if (lastTimedOut) {
       console.error(`[analyze-ai] Timeout ${UPSTREAM_TIMEOUT_MS / 1000} detik menunggu OpenRouter`)
       res.status(502).json({
         error: 'Layanan AI terlalu lama merespons. Coba lagi — hasil analisis standar tetap bisa dipakai.',
@@ -868,6 +1025,7 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
     }
     res.status(502).json({
       error: 'Layanan AI sedang tidak bisa dihubungi. Coba lagi nanti — hasil analisis standar tetap bisa dipakai.',
+      detail: lastDetail,
     })
     return
   }
@@ -877,8 +1035,7 @@ export default async function handler(req: AiRequest, res: AiResponse): Promise<
     // field "detail" dan log server, agar penyebab 502 terlihat. Yang
     // disertakan hanya status dan pesan OpenRouter — TIDAK termasuk API key,
     // header, atau isi CV/permintaan.
-    const message = upstreamMessage ?? (await readUpstreamMessage(aiResponse))
-    const detail = `OpenRouter HTTP ${aiResponse.status}${message ? `: ${message}` : ''}`
+    const detail = lastDetail
     console.error(`[analyze-ai] ${detail}`)
 
     if (aiResponse.status === 429) {

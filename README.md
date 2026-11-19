@@ -122,23 +122,39 @@ AI lewat **OpenRouter** (model default **NVIDIA Nemotron 3 Ultra 550B
 (free)**, `nvidia/nemotron-3-ultra-550b-a55b:free`) untuk saran kualitatif: penulisan ulang poin
 pengalaman, daftar kekurangan (terhadap lowongan bila diisi), dan contoh
 ringkasan profil. Fitur ini **tidak mengubah skor utama** dan dipakai **hanya
-untuk testing** — model gratis bisa lambat atau kena rate limit.
+untuk testing** — model gratis bisa lambat atau kena rate limit. Frontend
+ikut mengirim hasil penilaian rule-based (skor Siap, skor per aspek, bukti
+terlemah, dan prioritas perbaikan) sebagai konteks, supaya saran AI tidak
+bertentangan dengan penilaian standar; AI berperan sebagai penasihat, bukan
+penilai. Bila model utama gagal dengan error yang bisa dipulihkan (404, 429,
+timeout, atau 5xx), endpoint otomatis mencoba model cadangan gratis
+**Google Gemma 4 31B** (`google/gemma-4-31b-it:free`).
 
 ### Arsitektur
 
 ```
 Browser ──POST /api/analyze-ai──▶ Vercel Serverless Function ──▶ OpenRouter
          {cvText, targetRole,      (api/analyze-ai.ts,            (Chat Completions,
-          jobDesc}                   API key di env server)         JSON terstruktur)
+          jobDesc, rule}            API key di env server)         JSON terstruktur)
 ```
 
 - Endpoint hanya menerima `POST` JSON: `cvText` (wajib, 50–12.000 karakter),
-  `targetRole` (opsional), `jobDesc` (opsional, maks 6.000 karakter).
+  `targetRole` (opsional), `jobDesc` (opsional, maks 6.000 karakter),
+  `rule` (opsional, hasil penilaian rule-based dari frontend: skor Siap,
+  skor per aspek, bukti terlemah, dan prioritas perbaikan).
 - Ada rate limit sederhana in-memory: maks 5 permintaan per 10 menit per IP
   (best-effort per instance fungsi).
 - Frontend hanya memanggil endpoint setelah pengguna mencentang persetujuan
-  pengiriman teks CV. Bila OpenRouter membalas rate limit (429), endpoint
-  meneruskannya sebagai 429 dan analisis standar tetap bisa dipakai.
+  pengiriman teks CV ke OpenRouter (model utama NVIDIA Nemotron 3 Ultra 550B
+  gratis, atau model cadangan Google Gemma 4 31B gratis bila yang utama gagal);
+  teks tidak disimpan dan tidak dicatat ke log oleh Screening CV. Bila kedua
+  model membalas rate limit (429), endpoint meneruskannya sebagai 429 dan
+  analisis standar tetap bisa dipakai.
+- Model cadangan: bila model utama membalas 404, 429, timeout, atau error 5xx,
+  endpoint otomatis mencoba Google Gemma 4 31B (`google/gemma-4-31b-it:free`,
+  bisa dioverride lewat env `OPENROUTER_FALLBACK_MODEL`). Error 400 (parameter
+  ditolak), 401/403 (key ditolak), dan 402 (kredit tidak cukup) tidak memicu
+  fallback.
 - Error OpenRouter lain dipetakan rapi: 401/403 (key ditolak) dan 402 (kredit
   tidak cukup) menjadi 502 dengan penjelasan + field `detail` berisi status
   dan pesan resmi OpenRouter (tanpa key dan tanpa isi CV).

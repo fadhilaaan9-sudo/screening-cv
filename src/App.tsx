@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { analyzeCv, countWords, type AnalysisResult, type CandidateMode, type CheckItem, type Evidence } from './lib/analyze'
-import { requestAiAnalysis, requestAiAnalysisStreaming, type AiAnalysis } from './lib/ai'
+import { buildRuleContext, requestAiAnalysis, requestAiAnalysisStreaming, type AiAnalysis } from './lib/ai'
 import { SAMPLE_CV } from './lib/sampleCv'
 import { extractTextFromFile } from './lib/readFile'
 
@@ -473,7 +473,7 @@ export default function App() {
     setAiDuration(null)
     setAiElapsed(0)
     aiStartRef.current = Date.now()
-    const input = { cvText, targetRole, jobDesc }
+    const input = { cvText, targetRole, jobDesc, rule: result ? buildRuleContext(result) : undefined }
     let receivedEvent = false
     try {
       const data = await requestAiAnalysisStreaming(input, {
@@ -935,8 +935,9 @@ export default function App() {
                   CV-mu secara kualitatif: menulis ulang poin pengalamanmu, menunjukkan
                   kekurangan terhadap lowongan, dan memberi contoh ringkasan profil.
                   Bagian ini terpisah dan <strong>tidak mengubah skor utama</strong>. Model yang
-                  dipakai adalah <strong>NVIDIA Nemotron 3 Ultra 550B (gratis)</strong> — hanya
-                  untuk testing, bisa lambat atau kena rate limit.
+                  dipakai adalah <strong>NVIDIA Nemotron 3 Ultra 550B (gratis)</strong>, dengan
+                  model cadangan <strong>Google Gemma 4 31B (gratis)</strong> bila model utama
+                  gagal — hanya untuk testing, bisa lambat atau kena rate limit.
                 </p>
 
                 <label className="consent-row">
@@ -946,8 +947,8 @@ export default function App() {
                     onChange={(e) => setAiConsent(e.target.checked)}
                   />
                   <span>
-                    Saya setuju teks CV dikirim ke OpenRouter (model NVIDIA Nemotron 3 Ultra 550B, gratis) untuk dianalisis.
-                    Hasil analisis berbahasa Indonesia, walau CV berbahasa Inggris (saran tulis ulang tetap dalam bahasa CV). Teks tidak disimpan oleh Screening CV.
+                    Saya setuju teks CV dikirim ke OpenRouter untuk dianalisis AI (model utama NVIDIA Nemotron 3 Ultra 550B gratis; bila model utama gagal, dipakai model cadangan Google Gemma 4 31B gratis).
+                    Hasil analisis berbahasa Indonesia, walau CV berbahasa Inggris (saran tulis ulang tetap dalam bahasa CV). Teks tidak disimpan dan tidak dicatat ke log oleh Screening CV.
                   </span>
                 </label>
 

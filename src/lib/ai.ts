@@ -1,6 +1,8 @@
 // Klien untuk backend Analisis AI (POST /api/analyze-ai → OpenRouter).
 // Dipakai hanya bila pengguna mencentang persetujuan pengiriman teks CV.
 
+import type { AnalysisResult } from './analyze'
+
 export interface AiRewrite {
   asli: string
   saran: string
@@ -18,6 +20,38 @@ export interface AiRequestInput {
   cvText: string
   targetRole?: string
   jobDesc?: string
+  rule?: RuleContext
+}
+export interface RuleEvidenceContext {
+  title: string
+  score: number
+  reasons: string[]
+}
+
+export interface RuleContext {
+  readyScore: number
+  readyLabel: string
+  mode: string
+  aspects: { name: string; score: number; max: number }[]
+  weakestEvidence: RuleEvidenceContext[]
+  priorities: string[]
+}
+
+/** Ringkas hasil penilaian rule-based untuk dikirim sebagai konteks ke AI. */
+export function buildRuleContext(result: AnalysisResult): RuleContext {
+  const weakestEvidence = [...result.allEvidence]
+    .filter((e) => e.bullets.length > 0)
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 3)
+    .map((e) => ({ title: e.title, score: e.score, reasons: e.reasons }))
+  return {
+    readyScore: result.readyScore,
+    readyLabel: result.readyLabel,
+    mode: result.mode === 'fresh' ? 'Fresh Graduate' : 'Berpengalaman',
+    aspects: result.aspects.map((a) => ({ name: a.name, score: a.score, max: a.max })),
+    weakestEvidence,
+    priorities: result.priorities.map((c) => `${c.title} (${c.score}/${c.max}): ${c.message}`),
+  }
 }
 
 export async function requestAiAnalysis(input: AiRequestInput): Promise<AiAnalysis> {

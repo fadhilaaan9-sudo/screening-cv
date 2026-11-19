@@ -64,6 +64,8 @@ export interface Evidence {
   title: string
   source: EvidenceSource
   text: string
+  // Baris isi entri (sudah tanpa penanda bullet) - dipakai Playground untuk diedit.
+  bullets: string[]
   // Nilai STAR 0-10: Peran 2,5 / Periode 2,5 / Aksi 2,5 / Hasil 2,5.
   roleScore: number
   periodScore: number
@@ -101,6 +103,8 @@ export interface AnalysisResult {
   priorities: CheckItem[]
   topEvidence: Evidence[]
   extraEvidence: Evidence[]
+  // Semua bukti, urut skor tertinggi dulu - dipakai Playground untuk misi terlemah.
+  allEvidence: Evidence[]
   keywords: KeywordResult | null
   roleWarning: string | null
   modeNote: string | null
@@ -482,6 +486,7 @@ export function scoreEvidence(entry: RawEntry): Evidence {
     title,
     source: entry.source,
     text,
+    bullets: entry.bodyLines,
     roleScore,
     periodScore,
     actionScore,
@@ -973,6 +978,7 @@ export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): Analys
     priorities,
     topEvidence: top3,
     extraEvidence,
+    allEvidence: ranked,
     keywords,
     roleWarning,
     modeNote,

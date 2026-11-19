@@ -1,6 +1,8 @@
 // Uji logika penilaian berbasis bukti (STAR, 3 terbaik, dua skor).
 // Jalankan: npx tsx scripts/run-tests.ts
-import { analyzeCv, applyCap, detectCvLanguage, detectPhone, findPortfolio } from '../src/lib/analyze'
+import { analyzeCv, applyCap, detectCvLanguage, detectPhone, findPortfolio, rescaleScore } from '../src/lib/analyze'
+import { canonicalizeSkill, findSkillsInText } from '../src/lib/skills'
+import { detectRoleProfile, ROLE_PROFILES } from '../src/lib/roles'
 import { SAMPLE_CV } from '../src/lib/sampleCv'
 
 const MEDIUM_CV = `Budi Santoso
@@ -284,6 +286,84 @@ check('HP rentang tahun "2022 - 2024"', detectPhone('Bekerja tahun 2022 - 2024 d
 check('HP telepon kantor "021-5551234"', detectPhone('Telepon kantor 021-5551234') === false, 'harus false')
 check('Portofolio github.com terdeteksi', findPortfolio('github.com/Fakhriaja07') !== null, String(findPortfolio('github.com/Fakhriaja07')))
 check('Kata "portofolio" tanpa alamat', findPortfolio('Saya punya portofolio yang bagus') === null, 'harus null')
+
+// ---- Rubrik per peran + skill semantik (2026-11-19) ----
+
+check(
+  'Bobot tiap profil peran total 100',
+  ROLE_PROFILES.every((p) => Object.values(p.weights).reduce((s, w) => s + w, 0) === 100),
+  ROLE_PROFILES.map((p) => `${p.label}=${Object.values(p.weights).reduce((s, w) => s + w, 0)}`).join(', '),
+)
+
+check(
+  'CV contoh tanpa peran tetap 72 di Umum',
+  strong.readyScore === 72 && strong.roleProfile.id === 'umum',
+  `Skor Siap ${strong.readyScore} (${strong.roleProfile.label})`,
+)
+
+const strongDa = analyzeCv(SAMPLE_CV, { mode: 'experienced', targetRole: 'Data Analyst' })
+const strongDev = analyzeCv(SAMPLE_CV, { mode: 'experienced', targetRole: 'Software Developer' })
+check(
+  'Profil Data Analyst terdeteksi dari posisi target',
+  strongDa.roleProfile.id === 'data-analyst',
+  `${strongDa.roleProfile.label} — ${strongDa.roleProfile.reason}`,
+)
+check(
+  'CV sama, profil beda -> skor beda',
+  strongDa.readyScore !== strongDev.readyScore,
+  `DA ${strongDa.readyScore} vs Developer ${strongDev.readyScore}`,
+)
+check(
+  'CV contoh peran Data Analyst: Skill 8,5/20 dan total 69',
+  aspectScore(strongDa, 'Skill Relevan') === 8.5 && strongDa.readyScore === 69,
+  `Skill ${aspectScore(strongDa, 'Skill Relevan')}/20, Skor Siap ${strongDa.readyScore}`,
+)
+check(
+  'Profil manual (roleProfileId) mengalahkan deteksi otomatis',
+  analyzeCv(SAMPLE_CV, { mode: 'experienced', targetRole: 'Data Analyst', roleProfileId: 'akuntan' })
+    .roleProfile.id === 'akuntan',
+  'roleProfileId akuntan dipakai',
+)
+check(
+  'Peran tak dikenal -> profil Umum',
+  detectRoleProfile('Kepala Desa').profile.id === 'umum',
+  detectRoleProfile('Kepala Desa').profile.label,
+)
+
+check('MySQL membuktikan SQL', canonicalizeSkill('MySQL').includes('sql'), canonicalizeSkill('MySQL').join(', '))
+check(
+  'pandas membuktikan Python',
+  findSkillsInText('Mengolah data dengan pandas setiap hari').has('python'),
+  'python terbukti',
+)
+check(
+  'Implikasi satu tingkat: pandas -> Python, Python TIDAK -> Django',
+  findSkillsInText('Mengolah data dengan pandas').has('python') &&
+    !findSkillsInText('Menulis script Python untuk otomasi').has('django'),
+  'pandas->python ya; python->django tidak',
+)
+check(
+  'Excel + Google Sheets = 1 skill kanonik',
+  canonicalizeSkill('Google Sheets').includes('excel') &&
+    canonicalizeSkill('Microsoft Excel').includes('excel'),
+  'keduanya -> excel',
+)
+check(
+  'Akronim aman: IT dan C tidak membuktikan skill apa pun',
+  canonicalizeSkill('IT').length === 0 && findSkillsInText('Staff IT Support di perusahaan').size === 0 &&
+    !findSkillsInText('Nilai C untuk mata kuliah').has('c-sharp'),
+  'tidak ada false positive',
+)
+check(
+  "C Sharp (ditulis lengkap) membuktikan C#",
+  canonicalizeSkill('C Sharp').includes('c-sharp'),
+  canonicalizeSkill('C Sharp').join(', '),
+)
+check(
+  'Rescale: fraksi 0,5 ke bobot 25 = 12,5',
+  rescaleScore(0.5, 25) === 12.5,
+  String(rescaleScore(0.5, 25)),
+)
 
 if (failures > 0) {
   console.error(`\n${failures} uji GAGAL`)

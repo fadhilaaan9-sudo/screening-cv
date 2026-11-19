@@ -4,6 +4,7 @@ import { analyzeCv, countWords, type AnalysisResult, type CandidateMode, type Ch
 import { buildRuleContext, requestAiAnalysis, requestAiAnalysisStreaming, type AiAnalysis } from './lib/ai'
 import { SAMPLE_CV } from './lib/sampleCv'
 import { extractTextFromFile } from './lib/readFile'
+import { ROLE_PROFILES } from './lib/roles'
 
 // ---------- Ikon SVG inline ----------
 function Icon({ d, size = 20 }: { d: string; size?: number }) {
@@ -96,6 +97,8 @@ export default function App() {
   const [targetRole, setTargetRole] = useState('')
   const [jobDesc, setJobDesc] = useState('')
   const [mode, setMode] = useState<CandidateMode>('fresh')
+  // '' = otomatis: profil dideteksi dari posisi target / deskripsi lowongan.
+  const [roleProfileId, setRoleProfileId] = useState('')
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [fileName, setFileName] = useState('')
   const [error, setError] = useState('')
@@ -156,7 +159,14 @@ export default function App() {
       setError('Teks CV masih terlalu pendek. Upload file CV atau tempel teks CV terlebih dahulu.')
       return
     }
-    setResult(analyzeCv(cvText, { targetRole, jobDesc, mode }))
+    setResult(
+      analyzeCv(cvText, {
+        targetRole,
+        jobDesc,
+        mode,
+        roleProfileId: roleProfileId || undefined,
+      }),
+    )
     requestAnimationFrame(() => {
       resultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
@@ -174,6 +184,7 @@ export default function App() {
     setTargetRole('')
     setJobDesc('')
     setMode('fresh')
+    setRoleProfileId('')
     setResult(null)
     setFileName('')
     setError('')
@@ -246,6 +257,7 @@ export default function App() {
     const lines: string[] = [
       `HASIL SCREENING CV`,
       `Mode: ${result.mode === 'fresh' ? 'Fresh Graduate' : 'Berpengalaman'}`,
+      `Profil peran: ${result.roleProfile.label} (${result.roleProfile.reason})`,
       `Skor Siap: ${result.readyScore}/100 — ${result.readyLabel}`,
       ...(result.matchScore !== null
         ? [`Skor Cocok: ${result.matchScore}/100 — ${result.matchLabel ?? ''}`]
@@ -430,6 +442,21 @@ export default function App() {
           </label>
 
           <label className="field">
+            <span>Rubrik peran (opsional)</span>
+            <select value={roleProfileId} onChange={(e) => setRoleProfileId(e.target.value)}>
+              <option value="">Otomatis — dari posisi target</option>
+              {ROLE_PROFILES.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            <small className="counter">
+              Bobot aspek menyesuaikan peran yang dilamar. Kosongkan untuk deteksi otomatis.
+            </small>
+          </label>
+
+          <label className="field">
             <span>Deskripsi lowongan (opsional)</span>
             <textarea
               value={jobDesc}
@@ -497,11 +524,16 @@ export default function App() {
                   </div>
                   <div className="result-summary">
                     <span className="badge badge-soft">Hasil analisis • {result.mode === 'fresh' ? 'Fresh Graduate' : 'Berpengalaman'}</span>
+                    <span className="badge badge-soft">Rubrik: {result.roleProfile.label}</span>
                     <h2>{result.readyLabel}</h2>
                     <p>
                       CV berisi {result.wordCount} kata. Skor dihitung dari bukti isi yang
                       benar-benar ada — bagian yang kosong poinnya 0. Skor tertinggi yang
                       realistis adalah 95: selalu ada lowongan yang menuntut bukti lain.
+                    </p>
+                    <p>
+                      Profil peran: <strong>{result.roleProfile.label}</strong> — {result.roleProfile.reason}.
+                      Bobot aspek disesuaikan dengan peran ini.
                     </p>
                     {result.matchScore !== null && (
                       <p>
@@ -776,7 +808,10 @@ export default function App() {
             <p>
               Penilaian berbasis bukti (rule-based) dengan total <strong>100 poin</strong> dari{' '}
               <strong>6 aspek</strong>, ditampilkan dengan plafon realistis <strong>95</strong>.
-              Poin hanya diberikan untuk bukti isi yang benar-benar ada di CV:
+              Poin hanya diberikan untuk bukti isi yang benar-benar ada di CV. Bobot di bawah ini
+              adalah rubrik Umum; bila posisi targetmu cocok dengan profil peran (Data Analyst,
+              Software Developer, Digital Marketing, Desainer, Akuntan/Finance), bobot tiap aspek
+              menyesuaikan peran itu — profil yang dipakai selalu ditampilkan di hasil.
             </p>
             <ul className="rules-list">
               <li><strong>Kontak — 15 poin:</strong> email valid (6), nomor HP Indonesia (5), LinkedIn (2), link karya (2). Format HP 08xx, +62, maupun bertanda kurung dengan spasi/strip/titik tetap terbaca.</li>

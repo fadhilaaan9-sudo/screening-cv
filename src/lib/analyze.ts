@@ -4,6 +4,9 @@
 // Peran, Periode, Aksi, Hasil. Hanya 3 bukti terbaik yang dihitung.
 // Total mentah 100 poin, ditampilkan dengan plafon realistis 95.
 
+import { canonicalizeSkill, findSkillsInText, getSkillEntry, skillLabel } from './skills'
+import { detectRoleProfile, getRoleProfile, type AspectName, type RoleProfile } from './roles'
+
 // ---------- Bahasa CV ----------
 // Skor memakai kamus bahasa CV-nya (Indonesia / Inggris).
 // Semua pesan hasil TETAP Bahasa Indonesia - bahasa hanya memilih kamus,
@@ -106,6 +109,8 @@ export interface AnalysisResult {
   // Semua bukti, urut skor tertinggi dulu - dipakai Playground untuk misi terlemah.
   allEvidence: Evidence[]
   keywords: KeywordResult | null
+  // Profil peran yang dipakai (terdeteksi otomatis atau dipilih manual).
+  roleProfile: { id: string; label: string; reason: string }
   roleWarning: string | null
   modeNote: string | null
   consistencyWarnings: string[]
@@ -117,6 +122,8 @@ export interface AnalyzeOptions {
   targetRole?: string
   jobDesc?: string
   mode?: CandidateMode
+  /** Id profil peran yang dipilih pengguna; bila kosong, dideteksi otomatis. */
+  roleProfileId?: string
 }
 
 export const MAX_DISPLAY_SCORE = 95
@@ -135,6 +142,14 @@ export function labelFor(score: number): string {
 /** Plafon realistis: total mentah 96-100 ditampilkan sebagai 95. */
 export function applyCap(raw: number): number {
   return Math.min(MAX_DISPLAY_SCORE, Math.max(0, Math.round(raw)))
+}
+
+/**
+ * Rescale: fraksi skor lama (0..1) ke bobot baru, dibulatkan ke 0,5 terdekat.
+ * Dipakai rubrik per peran — logika di dalam aspek tidak berubah, hanya bobotnya.
+ */
+export function rescaleScore(fraction: number, newMax: number): number {
+  return Math.round(fraction * newMax * 2) / 2
 }
 
 function statusOf(score: number, max: number): CheckStatus {
@@ -551,13 +566,29 @@ function extractJobKeywords(
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 18)
     .map(([w]) => w)
+  // Pencocokan semantik: kata kunci yang dikenal taksonomi dicocokkan lewat id
+  // kanoniknya (MySQL di lowongan cocok dengan SQL di bukti). Kata di luar
+  // taksonomi tetap dicocokkan literal seperti sebelumnya.
+  const evidenceSkillIds = findSkillsInText(evidenceLower)
+  const cvSkillIds = findSkillsInText(cvLower)
   const inEvidence: string[] = []
   const inCvOnly: string[] = []
   const missing: string[] = []
   for (const kw of selected) {
-    const pattern = new RegExp(`\\b${escapeRegExp(kw)}\\b`, 'i')
-    if (pattern.test(evidenceLower)) inEvidence.push(kw)
-    else if (pattern.test(cvLower)) inCvOnly.push(kw)
+    const ids = canonicalizeSkill(kw)
+    let where: 'evidence' | 'cv' | 'missing'
+    if (ids.length > 0) {
+      if (ids.some((id) => evidenceSkillIds.has(id))) where = 'evidence'
+      else if (ids.some((id) => cvSkillIds.has(id))) where = 'cv'
+      else where = 'missing'
+    } else {
+      const pattern = new RegExp(`\\b${escapeRegExp(kw)}\\b`, 'i')
+      if (pattern.test(evidenceLower)) where = 'evidence'
+      else if (pattern.test(cvLower)) where = 'cv'
+      else where = 'missing'
+    }
+    if (where === 'evidence') inEvidence.push(kw)
+    else if (where === 'cv') inCvOnly.push(kw)
     else missing.push(kw)
   }
   return {
@@ -587,31 +618,23 @@ function significantRoleWords(role: string): string[] {
     .filter((w) => w.length >= 4 && !STOPWORDS.has(w))
 }
 
-// Sinonim skill yang searti digabung jadi satu (anti-duplikat).
-const SKILL_SYNONYMS: Record<string, string> = {
-  'microsoft excel': 'excel',
-  'ms excel': 'excel',
-  'microsoft word': 'word',
-  'ms word': 'word',
-  'microsoft powerpoint': 'powerpoint',
-  'ms powerpoint': 'powerpoint',
-  powerbi: 'power bi',
-  'bahasa inggris': 'inggris',
-  'english': 'inggris',
-}
-
-function normalizeSkill(raw: string): string {
-  const s = raw.toLowerCase().replace(/^\s*[-*]\s*/, '').trim()
-  return SKILL_SYNONYMS[s] ?? s
-}
-
+// Pecah bagian Keahlian jadi item-item skill. Item yang dikenal taksonomi diganti
+// id kanoniknya (Excel + Google Sheets = 1: 'excel'); item tak dikenal dipertahankan
+// bentuk literalnya agar perilaku lama tetap jalan.
 function parseSkillItems(sectionText: string): string[] {
   if (!sectionText) return []
-  const items = sectionText
-    .split(/[\n,;•·|]+/)
-    .map((s) => normalizeSkill(s))
-    .filter((s) => s.length >= 2)
-  return [...new Set(items)]
+  const items: string[] = []
+  for (const raw of sectionText.split(/[\n,;•·|]+/)) {
+    const s = raw.toLowerCase().replace(/^\s*[-*]\s*/, '').trim()
+    if (s.length < 2) continue
+    const ids = canonicalizeSkill(s)
+    if (ids.length > 0) {
+      for (const id of ids) if (!items.includes(id)) items.push(id)
+    } else if (!items.includes(s)) {
+      items.push(s)
+    }
+  }
+  return items
 }
 
 // ---------- Fungsi analisis utama ----------
@@ -622,6 +645,12 @@ export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): Analys
   const cvLanguage = detectCvLanguage(text)
   const totalWords = countWords(text)
   const mode: CandidateMode = options.mode ?? 'fresh'
+  // Profil peran: dipilih manual lewat roleProfileId, atau dideteksi otomatis
+  // dari posisi target / deskripsi lowongan (fallback: Umum).
+  const detected = options.roleProfileId
+    ? { profile: getRoleProfile(options.roleProfileId), reason: 'dipilih manual' }
+    : detectRoleProfile(options.targetRole, options.jobDesc)
+  const roleProfile: RoleProfile = detected.profile
   const sections = splitSections(text)
   const evidence = extractEvidence(text)
   const evidenceText = evidence.map((e) => e.text).join('\n')
@@ -787,7 +816,12 @@ export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): Analys
   // ===== SKILL RELEVAN (maks 15) =====
   const skillsText = getSectionText(sections, ['keahlian'])
   const skillItems = parseSkillItems(skillsText)
+  // Skill kanonik terbukti bila id-nya (atau yang mengimplikasikannya) muncul di bukti.
+  // Item tak dikenal taksonomi tetap dicek literal seperti sebelumnya.
+  const evidenceSkillIds = findSkillsInText(evidenceText)
   const provenSkills = skillItems.filter((s) => {
+    if (evidenceSkillIds.has(s)) return true
+    if (getSkillEntry(s)) return false
     const pattern = new RegExp(`\\b${escapeRegExp(s)}\\b`, 'i')
     return pattern.test(evidenceText)
   })
@@ -803,7 +837,25 @@ export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): Analys
   const keywords = jobDesc ? extractJobKeywords(jobDesc, lower, evidenceLower) : null
   let relevanceScore = 0
   let relevanceNote: string
-  if (keywords) {
+  if (roleProfile.id !== 'umum' && roleProfile.requiredSkills.length > 0) {
+    // Relevansi per peran: skill wajib dihitung ganda, pelengkap sekali.
+    // Dinilai dari bukti (bukan dari daftar Keahlian) — skill wajib yang tidak
+    // ada buktinya disebut eksplisit agar pengguna tahu kekurangannya.
+    const reqProven = roleProfile.requiredSkills.filter((id) => evidenceSkillIds.has(id)).length
+    const niceProven = roleProfile.niceSkills.filter((id) => evidenceSkillIds.has(id)).length
+    const reqTotal = roleProfile.requiredSkills.length
+    const niceTotal = roleProfile.niceSkills.length
+    relevanceScore = rescaleScore(
+      (2 * reqProven + niceProven) / (2 * reqTotal + niceTotal),
+      6,
+    )
+    const missingReq = roleProfile.requiredSkills.filter((id) => !evidenceSkillIds.has(id))
+    relevanceNote =
+      `${reqProven} dari ${reqTotal} skill wajib ${roleProfile.label} terbukti di bukti` +
+      (missingReq.length > 0
+        ? `; belum ada bukti untuk: ${missingReq.map((id) => skillLabel(id)).join(', ')}`
+        : '')
+  } else if (keywords) {
     const inEv = keywords.inEvidence.length
     relevanceScore = inEv >= 6 ? 6 : inEv >= 4 ? 4 : inEv >= 2 ? 3 : inEv === 1 ? 1 : 0
     relevanceNote = `${inEv} dari ${keywords.total} kata kunci lowongan ditemukan di dalam bukti`
@@ -818,10 +870,17 @@ export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): Analys
     relevanceScore = Math.round((6 * provenScore) / 9)
     relevanceNote = 'tanpa lowongan/posisi target, dinilai proporsional dari skill terbukti'
   }
+  // Penulisan searti yang digabung taksonomi (mis. Excel + Google Sheets = 1 skill).
+  const rawSkillCount = skillsText
+    .split(/[\n,;•·|]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 2).length
+  const mergedSkillCount = rawSkillCount - skillItems.length
   const skillChecks = [
     makeCheck(
       'skill-terbukti', 'Skill Relevan', 'Skill terbukti di bukti', provenScore, 9,
       `${provenScore}/9 - ${provenSkills.length} dari ${skillItems.length} skill-mu terbukti muncul di dalam bukti` +
+        (mergedSkillCount > 0 ? `; ${mergedSkillCount} penulisan searti digabung jadi satu skill` : '') +
         (unprovenSkills.length > 0
           ? `; ${unprovenSkills.length} skill hanya klaim dan belum punya bukti.`
           : '.'),
@@ -867,7 +926,7 @@ export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): Analys
   ]
 
   // ===== Agregasi: dua skor =====
-  const aspectDefs: { name: string; max: number; checks: CheckItem[] }[] = [
+  const aspectDefs: { name: AspectName; max: number; checks: CheckItem[] }[] = [
     { name: 'Kontak', max: 15, checks: kontakChecks },
     { name: 'Ringkasan', max: 10, checks: ringkasanChecks },
     { name: 'Bukti STAR', max: 30, checks: buktiChecks },
@@ -875,12 +934,14 @@ export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): Analys
     { name: 'Skill Relevan', max: 15, checks: skillChecks },
     { name: 'Format & ATS', max: 15, checks: formatChecks },
   ]
-  const aspects: AspectResult[] = aspectDefs.map((a) => ({
-    name: a.name,
-    max: a.max,
-    score: a.checks.reduce((sum, c) => sum + c.score, 0),
-    checks: a.checks,
-  }))
+  // Bobot per peran: skor mentah tiap aspek di-rescale ke bobot profil.
+  // Profil Umum bobotnya sama dengan maks lama, jadi skor tidak berubah.
+  const aspects: AspectResult[] = aspectDefs.map((a) => {
+    const rawScore = a.checks.reduce((sum, c) => sum + c.score, 0)
+    const newMax = roleProfile.weights[a.name]
+    const score = newMax === a.max ? rawScore : rescaleScore(rawScore / a.max, newMax)
+    return { name: a.name, max: newMax, score, checks: a.checks }
+  })
   const allChecks = aspects.flatMap((a) => a.checks)
   const rawTotal = aspects.reduce((sum, a) => sum + a.score, 0)
   const readyScore = applyCap(rawTotal)
@@ -980,6 +1041,7 @@ export function analyzeCv(rawText: string, options: AnalyzeOptions = {}): Analys
     extraEvidence,
     allEvidence: ranked,
     keywords,
+    roleProfile: { id: roleProfile.id, label: roleProfile.label, reason: detected.reason },
     roleWarning,
     modeNote,
     consistencyWarnings,

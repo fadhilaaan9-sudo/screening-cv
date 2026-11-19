@@ -32,6 +32,7 @@ export interface RuleContext {
   readyScore: number
   readyLabel: string
   mode: string
+  profileLabel: string
   aspects: { name: string; score: number; max: number }[]
   weakestEvidence: RuleEvidenceContext[]
   priorities: string[]
@@ -48,6 +49,7 @@ export function buildRuleContext(result: AnalysisResult): RuleContext {
     readyScore: result.readyScore,
     readyLabel: result.readyLabel,
     mode: result.mode === 'fresh' ? 'Fresh Graduate' : 'Berpengalaman',
+    profileLabel: result.roleProfile.label,
     aspects: result.aspects.map((a) => ({ name: a.name, score: a.score, max: a.max })),
     weakestEvidence,
     priorities: result.priorities.map((c) => `${c.title} (${c.score}/${c.max}): ${c.message}`),

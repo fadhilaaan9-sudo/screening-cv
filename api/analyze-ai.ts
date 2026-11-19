@@ -150,6 +150,7 @@ export interface RuleContext {
   readyScore: number
   readyLabel: string
   mode: string
+  profileLabel: string
   aspects: { name: string; score: number; max: number }[]
   weakestEvidence: { title: string; score: number; reasons: string[] }[]
   priorities: string[]
@@ -192,6 +193,7 @@ export function parseRuleContext(value: unknown): RuleContext | null {
     readyScore,
     readyLabel: asString(obj.readyLabel),
     mode: asString(obj.mode),
+    profileLabel: asString(obj.profileLabel),
     aspects,
     weakestEvidence,
     priorities: asStringList(obj.priorities, 5),
@@ -202,6 +204,7 @@ function formatRulePart(rule: RuleContext): string {
   let scoreLine = `Skor Siap: ${rule.readyScore}/100`
   if (rule.readyLabel) scoreLine += ` (${rule.readyLabel})`
   if (rule.mode) scoreLine += ` • Mode: ${rule.mode}`
+  if (rule.profileLabel) scoreLine += ` • Profil peran: ${rule.profileLabel}`
   const lines: string[] = [
     'HASIL PENILAIAN RULE-BASED (dihitung deterministik di browser — ini patokan resminya, bukan tebakanmu):',
     scoreLine,

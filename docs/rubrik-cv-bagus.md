@@ -49,3 +49,29 @@ Ini panduan yang disesuaikan untuk fresh graduate Indonesia — bukan hukum.
 - Bila CV tidak cocok dengan posisi target (tidak ada bukti sama sekali untuk
   posisi itu, atau posisi jauh di bawah level CV), AI harus mengatakannya jujur
   di awal saran, bukan hanya memberi semangat.
+
+## R11 — Profil peran (rubrik per peran)
+
+- Satu rubrik tidak adil untuk semua peran: bobot 6 aspek berubah menurut profil peran
+  yang dilamar. Total tetap 100, plafon 95, dan cara menilai di dalam tiap aspek tidak berubah.
+- Bobot v1 (Kontak/Ringkasan/STAR/Pendidikan/Skill/Format): Umum 15/10/30/15/15/15,
+  Data Analyst 10/10/30/15/20/15, Software Developer 10/10/30/10/25/15,
+  Digital Marketing 10/15/30/10/20/15, Desainer 10/10/25/10/25/20,
+  Akuntan/Finance 15/10/30/20/10/15.
+- STAR tetap universal (R5): yang berubah per peran hanya bobot, bukan cara menilai bukti.
+- Profil dideteksi otomatis dari posisi target / deskripsi lowongan (longest-match),
+  atau dipilih manual di form. Profil yang dipakai selalu ditampilkan di hasil.
+- AI wajib menyebut profil peran di ringkasannya bila ada (`Profil peran: Data Analyst`).
+
+## R12 — Skill semantik (taksonomi kanonik)
+
+- Satu konsep skill = satu id kanonik, apa pun cara penulisannya: MySQL = SQL,
+  MS Excel = Excel, PowerBI = Power BI, Google Sheets = Excel.
+- Skill terbukti bila nama tool/tekniknya — atau yang mengimplikasikannya satu tingkat
+  (pandas → Python, Power BI → visualisasi data) — muncul di dalam bukti.
+  Implikasi tidak merambat: Python tidak membuktikan Django.
+- Kata generik tidak membuktikan skill: "script otomatis" bukan Python,
+  "membersihkan data" bukan SQL, "dashboard" sebagai kata bukan Tableau
+  (tapi membangun dashboard adalah bukti visualisasi data).
+- Relevansi per peran: skill wajib peran dihitung ganda. Skill wajib yang belum ada
+  buktinya disebut eksplisit di hasil, bukan disembunyikan.
